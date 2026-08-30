@@ -1,0 +1,1 @@
+An isolated Mac Dictation Agent product-loop demo. A generic text field starts empty. The status changes from ready to listening and local transcription. The sentence appears at the cursor, followed by the measured 12.5-times-real-time result.

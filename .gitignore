@@ -1,0 +1,40 @@
+# Build output
+.build/
+dist/
+assets/demo/raw/
+swift-agent/.build/
+DerivedData/
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Runtime data and logs
+data/
+logs/
+*.log
+tts.env
+.env
+tts-audio/
+vendor/permanent-transcriber/.state/
+vendor/permanent-transcriber/storage/
+
+# Local transcription and benchmark output
+batch-*/
+chunk-bench-*/
+debug-audio/
+*.wav
+*.caf
+*.m4a
+*.mp3
+*.aiff
+*.aif
+*.opus
+*.mov
+
+# macOS metadata
+.DS_Store

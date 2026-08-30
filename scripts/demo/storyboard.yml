@@ -1,0 +1,27 @@
+output: ../../assets/demo/raw/dictation-demo.webm
+url: scene.html
+viewport:
+  width: 1280
+  height: 720
+cursor: false
+scenes:
+- name: Ready
+  do:
+  - pause: 1.0
+- name: Listen
+  do:
+  - js: "setState('listening')"
+  - pause: 2.0
+- name: Transcribe locally
+  do:
+  - js: "setState('transcribing')"
+  - pause: 0.7
+- name: Paste at the cursor
+  do:
+  - click: "#editor"
+  - type:
+      into: "#editor"
+      text: "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac."
+      delay_ms: 18
+  - js: "setState('done')"
+  - pause: 2.0

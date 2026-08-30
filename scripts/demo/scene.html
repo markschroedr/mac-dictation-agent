@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mac Dictation Agent demo</title>
+<style>
+  :root { color-scheme: dark; --bg:#0e0d0b; --panel:#171512; --panel-2:#1d1a16; --border:#302b25; --text:#eee7dc; --muted:#9e968b; --accent:#da8b60; --ok:#8ea990; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; width:1280px; height:720px; overflow:hidden; }
+  body { background:var(--bg); color:var(--text); font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  main { position:relative; width:100%; height:100%; padding:54px 66px; }
+  .topline { display:flex; align-items:center; justify-content:space-between; }
+  .brand { display:flex; align-items:center; gap:14px; font-size:19px; font-weight:720; letter-spacing:-.01em; }
+  .mic { position:relative; width:32px; height:32px; border:1px solid var(--border); border-radius:50%; background:var(--panel); }
+  .mic::before { content:""; position:absolute; width:7px; height:13px; left:11px; top:6px; border:2px solid var(--text); border-radius:6px; }
+  .mic::after { content:""; position:absolute; width:14px; height:8px; left:8px; top:14px; border:2px solid var(--text); border-top:0; border-radius:0 0 9px 9px; }
+  .local { color:var(--muted); font-size:14px; letter-spacing:.04em; }
+  .grid { display:grid; grid-template-columns:1fr 330px; gap:42px; margin-top:42px; align-items:center; }
+  .editor-shell { position:relative; height:510px; overflow:hidden; border:1px solid var(--border); border-radius:14px; background:var(--panel); box-shadow:0 28px 70px rgba(0,0,0,.42); }
+  .titlebar { height:46px; display:flex; align-items:center; padding:0 16px; border-bottom:1px solid var(--border); color:var(--muted); font-size:13px; }
+  .dots { display:flex; gap:8px; margin-right:18px; }
+  .dots i { width:10px; height:10px; border-radius:50%; background:#5a5148; }
+  textarea { display:block; width:100%; height:310px; resize:none; border:0; outline:0; padding:42px 46px; background:transparent; color:var(--text); caret-color:var(--accent); font:26px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .statusbar { position:absolute; left:32px; right:32px; bottom:28px; height:76px; display:flex; align-items:center; gap:18px; padding:0 22px; border:1px solid var(--border); border-radius:10px; background:var(--panel-2); }
+  .wave { display:flex; align-items:center; gap:4px; width:52px; height:28px; }
+  .wave i { display:block; width:4px; height:6px; border-radius:3px; background:var(--muted); transition:height .18s,background .18s; }
+  body[data-state="listening"] .wave i { background:var(--accent); animation:pulse .72s ease-in-out infinite alternate; }
+  body[data-state="listening"] .wave i:nth-child(2) { animation-delay:-.28s; }
+  body[data-state="listening"] .wave i:nth-child(3) { animation-delay:-.52s; }
+  body[data-state="listening"] .wave i:nth-child(4) { animation-delay:-.16s; }
+  body[data-state="listening"] .wave i:nth-child(5) { animation-delay:-.4s; }
+  @keyframes pulse { from { height:7px; } to { height:27px; } }
+  .status-copy strong { display:block; font-size:16px; font-weight:680; }
+  .status-copy span { display:block; margin-top:5px; color:var(--muted); font-size:13px; }
+  .metric { margin-left:auto; min-width:142px; text-align:right; }
+  .metric strong { display:block; color:var(--accent); font-size:18px; }
+  .metric span { color:var(--muted); font-size:12px; }
+  .side { align-self:stretch; display:flex; flex-direction:column; justify-content:center; }
+  .eyebrow { color:var(--accent); font-size:13px; font-weight:760; letter-spacing:.14em; text-transform:uppercase; }
+  h1 { margin:18px 0 0; font-size:46px; line-height:1.04; letter-spacing:-.045em; }
+  .side p { margin:22px 0 0; color:var(--muted); font-size:18px; line-height:1.55; }
+  kbd { display:inline-block; width:max-content; margin:28px 0 0; padding:11px 14px; border:1px solid var(--border); border-bottom-color:#514941; border-radius:7px; background:var(--panel); font:700 15px/1 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .facts { margin-top:30px; padding-top:24px; border-top:1px solid var(--border); display:grid; gap:10px; color:var(--muted); font-size:13px; }
+  .facts span::before { content:"✓"; margin-right:9px; color:var(--ok); }
+</style>
+</head>
+<body data-state="idle">
+<main>
+  <div class="topline"><div class="brand"><span class="mic"></span>Mac Dictation Agent</div><div class="local">LOCAL · APPLE SILICON · OPEN SOURCE</div></div>
+  <section class="grid">
+    <div class="editor-shell">
+      <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span>Any text field</div>
+      <textarea id="editor" spellcheck="false">Meeting notes
+
+</textarea>
+      <div class="statusbar">
+        <div class="wave"><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="status-copy"><strong id="status-title">Ready</strong><span id="status-detail">Hold Control+Shift and speak</span></div>
+        <div class="metric"><strong id="metric-main">on-device</strong><span id="metric-detail">no cloud round-trip</span></div>
+      </div>
+    </div>
+    <aside class="side">
+      <div class="eyebrow">The whole loop</div><h1>Hold. Speak.<br>Release.</h1>
+      <p>The transcript appears where the cursor already was.</p><kbd>⌃ + ⇧</kbd>
+      <div class="facts"><span>Parakeet through Core ML</span><span>No account or usage meter</span><span>Recent transcript recovery</span></div>
+    </aside>
+  </section>
+</main>
+<script>
+  const states = {
+    idle:["Ready","Hold Control+Shift and speak","on-device","no cloud round-trip"],
+    listening:["Listening locally…","Release the keys when you are done","6.70 sec","captured audio"],
+    transcribing:["Transcribing on your Mac…","Parakeet is running through Core ML","0.53 sec","median warm run"],
+    done:["Pasted at the cursor","The app returns to the menu bar","12.5×","real-time speed"]
+  };
+  window.setState = (name) => {
+    document.body.dataset.state = name;
+    const [title,detail,metric,metricDetail] = states[name];
+    document.querySelector("#status-title").textContent = title;
+    document.querySelector("#status-detail").textContent = detail;
+    document.querySelector("#metric-main").textContent = metric;
+    document.querySelector("#metric-detail").textContent = metricDetail;
+    if (name === "done") document.querySelector("#metric-main").style.color = "var(--ok)";
+  };
+</script>
+</body>
+</html>

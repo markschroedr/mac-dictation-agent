@@ -1,0 +1,24 @@
+[project]
+name = "permanent-transcriber"
+version = "0.1.0"
+description = "Always-on local speech capture pipeline"
+requires-python = ">=3.11"
+dependencies = [
+  "huggingface-hub>=1.8.0",
+  "mlx-audio>=0.4.5",
+  "numpy>=2.4.3",
+  "sounddevice>=0.5.1",
+  "transformers>=5.5,<5.13",
+  "typer>=0.16.0",
+  "webrtcvad-wheels>=2.0.14",
+]
+
+[project.scripts]
+permanent-transcriber = "permanent_transcriber.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/permanent_transcriber"]
