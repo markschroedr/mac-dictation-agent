@@ -115,6 +115,8 @@ Choose a microphone and mode from the menu, then start continuous transcription.
 - **Canonical Only** writes larger durable batches, speaker-labelled variants, and compacted archival audio.
 - **Quick + Canonical** also writes smaller provisional batches with lower latency.
 
+Sortformer diarization streams fixed five-second audio chunks and limits MLX working memory to 2 GiB.
+
 Capture data lives under:
 
 ```txt
