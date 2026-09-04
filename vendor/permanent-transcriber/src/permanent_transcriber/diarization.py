@@ -7,11 +7,16 @@ import shutil
 import subprocess
 import tempfile
 import time
-from typing import Any
+from typing import Any, Iterator
 import wave
+
+import numpy as np
 
 from .config import AppPaths
 
+DIARIZATION_CHUNK_SECONDS = 5.0
+DIARIZATION_MLX_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024
+DIARIZATION_MLX_CACHE_LIMIT_BYTES = 0
 MODEL_ID = "mlx-community/diar_streaming_sortformer_4spk-v2.1-fp16"
 
 
@@ -38,23 +43,40 @@ class SortformerDiarizer:
         self.load_seconds: float | None = None
 
     def diarize(self, input_paths: list[Path], asr_segments: list[TimedText], fallback_text: str) -> dict[str, Any]:
+        import mlx.core as mx
+
         self.paths.tmp_root.mkdir(parents=True, exist_ok=True)
         tmp_dir = Path(tempfile.mkdtemp(prefix="sortformer-diarize-", dir=self.paths.tmp_root))
+        previous_memory_limit = mx.set_memory_limit(DIARIZATION_MLX_MEMORY_LIMIT_BYTES)
+        previous_cache_limit = mx.set_cache_limit(DIARIZATION_MLX_CACHE_LIMIT_BYTES)
+        mx.reset_peak_memory()
         try:
             wav_path = tmp_dir / "input.wav"
             concat_to_wav(input_paths, wav_path)
             audio_seconds = wav_duration_seconds(wav_path)
 
             started = time.perf_counter()
-            result = self.model().generate(
-                str(wav_path),
+            speaker_segments: list[SpeakerSegment] = []
+            chunk_count = 0
+            for result in self.model().generate_stream(
+                iter_wav_chunks(wav_path, chunk_seconds=DIARIZATION_CHUNK_SECONDS),
+                sample_rate=16_000,
                 threshold=0.5,
                 min_duration=0.2,
                 merge_gap=0.2,
                 verbose=False,
-            )
+            ):
+                chunk_count += 1
+                speaker_segments.extend(
+                    normalize_speaker_segments(get_attr(result, "segments", default=[]))
+                )
+                if mx.get_peak_memory() > DIARIZATION_MLX_MEMORY_LIMIT_BYTES:
+                    raise RuntimeError("Sortformer exceeded its MLX memory limit")
+                del result
+                mx.clear_cache()
+
             elapsed = time.perf_counter() - started
-            speaker_segments = normalize_speaker_segments(get_attr(result, "segments", default=[]))
+            peak_memory_bytes = mx.get_peak_memory()
             diarized_lines = assign_speakers_to_text(
                 asr_segments=asr_segments,
                 speaker_segments=speaker_segments,
@@ -70,6 +92,10 @@ class SortformerDiarizer:
                 "elapsed_seconds": round(elapsed, 3),
                 "rtf": round(elapsed / audio_seconds, 4) if audio_seconds > 0 else None,
                 "speed_x_realtime": round(audio_seconds / elapsed, 2) if elapsed > 0 else math.inf,
+                "chunk_seconds": DIARIZATION_CHUNK_SECONDS,
+                "chunk_count": chunk_count,
+                "memory_limit_bytes": DIARIZATION_MLX_MEMORY_LIMIT_BYTES,
+                "peak_memory_bytes": peak_memory_bytes,
                 "speaker_count": len(speakers),
                 "speakers": speakers,
                 "speaker_segments": [asdict(segment) for segment in speaker_segments],
@@ -77,6 +103,9 @@ class SortformerDiarizer:
                 "diarized_lines": diarized_lines,
             }
         finally:
+            mx.clear_cache()
+            mx.set_cache_limit(previous_cache_limit)
+            mx.set_memory_limit(previous_memory_limit)
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def model(self) -> Any:
@@ -245,6 +274,18 @@ def escape_ffconcat_path(path: Path) -> str:
 def wav_duration_seconds(path: Path) -> float:
     with wave.open(str(path), "rb") as handle:
         return handle.getnframes() / handle.getframerate()
+
+
+def iter_wav_chunks(path: Path, *, chunk_seconds: float) -> Iterator[np.ndarray]:
+    if chunk_seconds <= 0:
+        raise ValueError("chunk_seconds must be positive")
+    with wave.open(str(path), "rb") as handle:
+        if handle.getnchannels() != 1 or handle.getsampwidth() != 2:
+            raise RuntimeError("diarization input must be mono 16-bit PCM WAV")
+        sample_rate = handle.getframerate()
+        frames_per_chunk = max(1, round(sample_rate * chunk_seconds))
+        while data := handle.readframes(frames_per_chunk):
+            yield np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
 
 
 def get_attr(obj: Any, *names: str, default: Any = None) -> Any:

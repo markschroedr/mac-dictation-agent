@@ -3367,6 +3367,7 @@ final class MicrophonePermissionResult: @unchecked Sendable {
 
 func sharedPermanentTranscriberEnvironment() -> [String: String] {
     [
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         "MAC_DICTATION_AGENT_ROOT": agentRoot.path,
         "MAC_DICTATION_ASR_PORT": asrPort,
         "MAC_DICTATION_ASR_WORKER_DIR": workerDir.path,

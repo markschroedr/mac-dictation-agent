@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Continuous transcription
+
+- Streamed Sortformer diarization in fixed five-second chunks.
+- Limited MLX diarization working memory to 2 GiB and disabled its free-memory cache.
+- Added the standard Homebrew paths when the app launches optional transcription tools.
+
 ## 0.1.0 - 2026-08-31
 
 First public release.
