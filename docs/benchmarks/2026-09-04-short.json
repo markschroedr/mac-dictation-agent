@@ -1,0 +1,128 @@
+{
+  "service": "FluidDictationService",
+  "chunk_seconds": 20,
+  "postroll_seconds": 0.45,
+  "cases": [
+    {
+      "recording_seconds": 6.7,
+      "chunks": [
+        {
+          "index": 1,
+          "final": true,
+          "audio_seconds": 7.15,
+          "available_at_seconds": 7.15,
+          "queue_wait_seconds": 0.005040416051633301,
+          "round_trip_seconds": 0.13913583394605666,
+          "completed_at_seconds": 7.29417624999769,
+          "response": {
+            "id": "paced-0-1",
+            "recognizeSeconds": 0.138554542,
+            "durationSeconds": 7.15,
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "speedup": 51.60422673115978
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.5941762499976901,
+      "chunks_completed_before_release": 0
+    },
+    {
+      "recording_seconds": 6.7,
+      "chunks": [
+        {
+          "index": 1,
+          "final": true,
+          "audio_seconds": 7.15,
+          "available_at_seconds": 7.15,
+          "queue_wait_seconds": 0.0050364999566223645,
+          "round_trip_seconds": 0.16594341595191509,
+          "completed_at_seconds": 7.320979915908538,
+          "response": {
+            "id": "paced-1-1",
+            "recognizeSeconds": 0.165017541,
+            "durationSeconds": 7.15,
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "speedup": 43.32872709574554
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.6209799159085376,
+      "chunks_completed_before_release": 0
+    },
+    {
+      "recording_seconds": 6.7,
+      "chunks": [
+        {
+          "index": 1,
+          "final": true,
+          "audio_seconds": 7.15,
+          "available_at_seconds": 7.15,
+          "queue_wait_seconds": 0.0050647499971088195,
+          "round_trip_seconds": 0.16116529202554375,
+          "completed_at_seconds": 7.316230042022653,
+          "response": {
+            "id": "paced-2-1",
+            "recognizeSeconds": 0.159703042,
+            "durationSeconds": 7.15,
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "speedup": 44.77059366220464
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.6162300420226527,
+      "chunks_completed_before_release": 0
+    },
+    {
+      "recording_seconds": 6.7,
+      "chunks": [
+        {
+          "index": 1,
+          "final": true,
+          "audio_seconds": 7.15,
+          "available_at_seconds": 7.15,
+          "queue_wait_seconds": 0.005014374991878512,
+          "round_trip_seconds": 0.12529041699599475,
+          "completed_at_seconds": 7.280304791987874,
+          "response": {
+            "id": "paced-3-1",
+            "recognizeSeconds": 0.124722,
+            "durationSeconds": 7.15,
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "speedup": 57.3274963518866
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.5803047919878734,
+      "chunks_completed_before_release": 0
+    },
+    {
+      "recording_seconds": 6.7,
+      "chunks": [
+        {
+          "index": 1,
+          "final": true,
+          "audio_seconds": 7.15,
+          "available_at_seconds": 7.15,
+          "queue_wait_seconds": 0.005012957984581234,
+          "round_trip_seconds": 0.09588641696609557,
+          "completed_at_seconds": 7.250899374950677,
+          "response": {
+            "id": "paced-4-1",
+            "recognizeSeconds": 0.095245875,
+            "durationSeconds": 7.15,
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "speedup": 75.06886781186063
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.550899374950677,
+      "chunks_completed_before_release": 0
+    }
+  ],
+  "model_load_seconds": 16.896379707963206
+}

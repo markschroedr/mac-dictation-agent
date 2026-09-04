@@ -15,13 +15,8 @@ scenes:
 - name: Transcribe locally
   do:
   - js: "setState('transcribing')"
-  - pause: 0.7
+  - pause: 0.65
 - name: Paste at the cursor
   do:
-  - click: "#editor"
-  - type:
-      into: "#editor"
-      text: "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac."
-      delay_ms: 18
-  - js: "setState('done')"
-  - pause: 2.0
+  - js: "pasteTranscript()"
+  - pause: 3.0

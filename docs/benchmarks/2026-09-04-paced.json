@@ -1,0 +1,631 @@
+{
+  "service": "FluidDictationService",
+  "chunk_seconds": 20,
+  "postroll_seconds": 0.45,
+  "cases": [
+    {
+      "recording_seconds": 6.7,
+      "chunks": [
+        {
+          "index": 1,
+          "final": true,
+          "audio_seconds": 7.15,
+          "available_at_seconds": 7.15,
+          "queue_wait_seconds": 0.005143124982714298,
+          "round_trip_seconds": 0.17229024996049702,
+          "completed_at_seconds": 7.327433374943212,
+          "response": {
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the na",
+            "recognizeSeconds": 0.170475083,
+            "speedup": 41.941613250307086,
+            "id": "paced-0-1",
+            "durationSeconds": 7.15
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.6274333749432115,
+      "chunks_completed_before_release": 0
+    },
+    {
+      "recording_seconds": 39,
+      "chunks": [
+        {
+          "index": 1,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 20.0,
+          "queue_wait_seconds": 0.005055875051766634,
+          "round_trip_seconds": 0.18996966700069606,
+          "completed_at_seconds": 20.195025542052463,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 106.26347978806982,
+            "recognizeSeconds": 0.188211416,
+            "id": "paced-1-1",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the",
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the"
+          }
+        },
+        {
+          "index": 2,
+          "final": true,
+          "audio_seconds": 19.450000000000003,
+          "available_at_seconds": 39.45,
+          "queue_wait_seconds": 0.005050125019621987,
+          "round_trip_seconds": 0.18075120903085917,
+          "completed_at_seconds": 39.635801334050484,
+          "response": {
+            "durationSeconds": 19.45,
+            "speedup": 108.54307012182008,
+            "recognizeSeconds": 0.179191541,
+            "id": "paced-1-2",
+            "text": "Notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document to.",
+            "rawText": "Notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document to."
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.635801334050484,
+      "chunks_completed_before_release": 1
+    },
+    {
+      "recording_seconds": 306.7,
+      "chunks": [
+        {
+          "index": 1,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 20.0,
+          "queue_wait_seconds": 0.0025642079999670386,
+          "round_trip_seconds": 0.21425479196477681,
+          "completed_at_seconds": 20.216818999964744,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 94.51922387977908,
+            "recognizeSeconds": 0.211597167,
+            "id": "paced-2-1",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the",
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the"
+          }
+        },
+        {
+          "index": 2,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 40.0,
+          "queue_wait_seconds": 0.0037377499975264072,
+          "round_trip_seconds": 0.2084072500001639,
+          "completed_at_seconds": 40.21214499999769,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 97.04511784741817,
+            "recognizeSeconds": 0.206089708,
+            "id": "paced-2-2",
+            "text": "Notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning.",
+            "rawText": "Notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning."
+          }
+        },
+        {
+          "index": 3,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 60.0,
+          "queue_wait_seconds": 0.0050394999561831355,
+          "round_trip_seconds": 0.2164425830123946,
+          "completed_at_seconds": 60.22148208296858,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 93.3066293492401,
+            "recognizeSeconds": 0.214347042,
+            "id": "paced-2-3",
+            "text": "Morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac.",
+            "rawText": "Morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac."
+          }
+        },
+        {
+          "index": 4,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 80.0,
+          "queue_wait_seconds": 0.005031749955378473,
+          "round_trip_seconds": 0.18937162507791072,
+          "completed_at_seconds": 80.19440337503329,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 106.8099104344428,
+            "recognizeSeconds": 0.187248542,
+            "id": "paced-2-4",
+            "text": "These are the notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow.",
+            "rawText": "These are the notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow."
+          }
+        },
+        {
+          "index": 5,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 100.0,
+          "queue_wait_seconds": 0.005037499940954149,
+          "round_trip_seconds": 0.16516395809594542,
+          "completed_at_seconds": 100.1702014580369,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 121.7359858354824,
+            "recognizeSeconds": 0.164289958,
+            "id": "paced-2-5",
+            "text": "Morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac.",
+            "rawText": "Morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac."
+          }
+        },
+        {
+          "index": 6,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 120.0,
+          "queue_wait_seconds": 0.00503654102794826,
+          "round_trip_seconds": 0.2012139589060098,
+          "completed_at_seconds": 120.20625049993396,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 100.02815392420351,
+            "recognizeSeconds": 0.199943708,
+            "id": "paced-2-6",
+            "text": "These are the notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document to",
+            "rawText": "These are the notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document to"
+          }
+        },
+        {
+          "index": 7,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 140.0,
+          "queue_wait_seconds": 0.005042540957219899,
+          "round_trip_seconds": 0.18628641706891358,
+          "completed_at_seconds": 140.19132895802613,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 108.13114705634334,
+            "recognizeSeconds": 0.184960583,
+            "id": "paced-2-7",
+            "text": "Tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac.",
+            "rawText": "Tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac."
+          }
+        },
+        {
+          "index": 8,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 160.0,
+          "queue_wait_seconds": 0.005029583000577986,
+          "round_trip_seconds": 0.2008782080374658,
+          "completed_at_seconds": 160.20590779103804,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 100.18431860845423,
+            "recognizeSeconds": 0.199632041,
+            "id": "paced-2-8",
+            "text": "These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document.",
+            "rawText": "These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document."
+          }
+        },
+        {
+          "index": 9,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 180.0,
+          "queue_wait_seconds": 0.005052041029557586,
+          "round_trip_seconds": 0.2054939999943599,
+          "completed_at_seconds": 180.21054604102392,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 98.55542387455866,
+            "recognizeSeconds": 0.2029315,
+            "id": "paced-2-9",
+            "text": "Tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my",
+            "rawText": "Tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my"
+          }
+        },
+        {
+          "index": 10,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 200.0,
+          "queue_wait_seconds": 0.00504179100971669,
+          "round_trip_seconds": 0.14907520893029869,
+          "completed_at_seconds": 200.15411699994002,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 134.8903428853839,
+            "recognizeSeconds": 0.148268583,
+            "id": "paced-2-10",
+            "text": "Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated documents.",
+            "rawText": "Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated documents."
+          }
+        },
+        {
+          "index": 11,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 220.0,
+          "queue_wait_seconds": 0.005043374956585467,
+          "round_trip_seconds": 0.18890079099219292,
+          "completed_at_seconds": 220.19394416594878,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 106.38672772378283,
+            "recognizeSeconds": 0.187993375,
+            "id": "paced-2-11",
+            "text": "Document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on.",
+            "rawText": "Document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on."
+          }
+        },
+        {
+          "index": 12,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 240.0,
+          "queue_wait_seconds": 0.005049832980148494,
+          "round_trip_seconds": 0.20388362498488277,
+          "completed_at_seconds": 240.20893345796503,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 98.97509213616071,
+            "recognizeSeconds": 0.202071042,
+            "id": "paced-2-12",
+            "text": "My Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the update.",
+            "rawText": "My Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the update."
+          }
+        },
+        {
+          "index": 13,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 260.0,
+          "queue_wait_seconds": 0.005033832974731922,
+          "round_trip_seconds": 0.1901992920320481,
+          "completed_at_seconds": 260.1952331250068,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 106.08864874638783,
+            "recognizeSeconds": 0.188521583,
+            "id": "paced-2-13",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely.",
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely."
+          }
+        },
+        {
+          "index": 14,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 280.0,
+          "queue_wait_seconds": 0.005039041046984494,
+          "round_trip_seconds": 0.16771099995821714,
+          "completed_at_seconds": 280.1727500410052,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 119.94734335616133,
+            "recognizeSeconds": 0.166739833,
+            "id": "paced-2-14",
+            "text": "These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the",
+            "rawText": "These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the"
+          }
+        },
+        {
+          "index": 15,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 300.0,
+          "queue_wait_seconds": 0.0011050410103052855,
+          "round_trip_seconds": 0.34926399996038526,
+          "completed_at_seconds": 300.3503690409707,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 57.99980425066065,
+            "recognizeSeconds": 0.34482875,
+            "id": "paced-2-15",
+            "text": "updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs in.",
+            "rawText": "updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs in."
+          }
+        },
+        {
+          "index": 16,
+          "final": true,
+          "audio_seconds": 7.149999999999977,
+          "available_at_seconds": 307.15,
+          "queue_wait_seconds": 0.005071415938459722,
+          "round_trip_seconds": 0.14647279202472419,
+          "completed_at_seconds": 307.30154420796316,
+          "response": {
+            "durationSeconds": 7.15,
+            "speedup": 49.44509703904572,
+            "recognizeSeconds": 0.144604833,
+            "id": "paced-2-16",
+            "text": "Entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the update.",
+            "rawText": "Entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the update."
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.6015442079631725,
+      "chunks_completed_before_release": 15
+    },
+    {
+      "recording_seconds": 319,
+      "chunks": [
+        {
+          "index": 1,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 20.0,
+          "queue_wait_seconds": 0.005015540984459221,
+          "round_trip_seconds": 0.167027874966152,
+          "completed_at_seconds": 20.17204341595061,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 120.58471528441413,
+            "recognizeSeconds": 0.1658585,
+            "id": "paced-3-1",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the",
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the"
+          }
+        },
+        {
+          "index": 2,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 40.0,
+          "queue_wait_seconds": 0.0050463329534977674,
+          "round_trip_seconds": 0.22989083302672952,
+          "completed_at_seconds": 40.23493716598023,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 87.68252350302642,
+            "recognizeSeconds": 0.228095625,
+            "id": "paced-3-2",
+            "text": "Notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning.",
+            "rawText": "Notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning."
+          }
+        },
+        {
+          "index": 3,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 60.0,
+          "queue_wait_seconds": 9.03749605640769e-05,
+          "round_trip_seconds": 0.1645433750236407,
+          "completed_at_seconds": 60.164633749984205,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 122.03083719255855,
+            "recognizeSeconds": 0.163893,
+            "id": "paced-3-3",
+            "text": "Morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac.",
+            "rawText": "Morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac."
+          }
+        },
+        {
+          "index": 4,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 80.0,
+          "queue_wait_seconds": 7.61660048738122e-05,
+          "round_trip_seconds": 0.1609683750430122,
+          "completed_at_seconds": 80.16104454104789,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 125.16235278138096,
+            "recognizeSeconds": 0.159792458,
+            "id": "paced-3-4",
+            "text": "These are the notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow.",
+            "rawText": "These are the notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow."
+          }
+        },
+        {
+          "index": 5,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 100.0,
+          "queue_wait_seconds": 0.005042916047386825,
+          "round_trip_seconds": 0.244944249978289,
+          "completed_at_seconds": 100.24998716602568,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 82.12144324330428,
+            "recognizeSeconds": 0.24354175,
+            "id": "paced-3-5",
+            "text": "Morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac.",
+            "rawText": "Morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac."
+          }
+        },
+        {
+          "index": 6,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 120.0,
+          "queue_wait_seconds": 0.005032957997173071,
+          "round_trip_seconds": 0.2113388329744339,
+          "completed_at_seconds": 120.2163717909716,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 95.41408105837421,
+            "recognizeSeconds": 0.209612667,
+            "id": "paced-3-6",
+            "text": "These are the notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document to",
+            "rawText": "These are the notes for the next meeting, we need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document to"
+          }
+        },
+        {
+          "index": 7,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 140.0,
+          "queue_wait_seconds": 0.005043833050876856,
+          "round_trip_seconds": 0.2293936249334365,
+          "completed_at_seconds": 140.2344374579843,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 88.05505642402912,
+            "recognizeSeconds": 0.227130625,
+            "id": "paced-3-7",
+            "text": "Tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac.",
+            "rawText": "Tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac."
+          }
+        },
+        {
+          "index": 8,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 160.0,
+          "queue_wait_seconds": 0.005019958014599979,
+          "round_trip_seconds": 0.1916322079487145,
+          "completed_at_seconds": 160.19665216596331,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 104.86354939981818,
+            "recognizeSeconds": 0.190724042,
+            "id": "paced-3-8",
+            "text": "These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document.",
+            "rawText": "These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document."
+          }
+        },
+        {
+          "index": 9,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 180.0,
+          "queue_wait_seconds": 0.004425375023856759,
+          "round_trip_seconds": 0.22538729093503207,
+          "completed_at_seconds": 180.2298126659589,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 89.47096351625073,
+            "recognizeSeconds": 0.223536209,
+            "id": "paced-3-9",
+            "text": "Tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my",
+            "rawText": "Tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my"
+          }
+        },
+        {
+          "index": 10,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 200.0,
+          "queue_wait_seconds": 0.005040916032157838,
+          "round_trip_seconds": 0.22852537501603365,
+          "completed_at_seconds": 200.2335662910482,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 88.3527350417439,
+            "recognizeSeconds": 0.226365375,
+            "id": "paced-3-10",
+            "text": "Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated documents.",
+            "rawText": "Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated documents."
+          }
+        },
+        {
+          "index": 11,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 220.0,
+          "queue_wait_seconds": 0.005119208013638854,
+          "round_trip_seconds": 0.20758404198568314,
+          "completed_at_seconds": 220.21270324999932,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 97.36207628638999,
+            "recognizeSeconds": 0.205418791,
+            "id": "paced-3-11",
+            "text": "Document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on.",
+            "rawText": "Document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on."
+          }
+        },
+        {
+          "index": 12,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 240.0,
+          "queue_wait_seconds": 0.00504425005055964,
+          "round_trip_seconds": 0.2507440409390256,
+          "completed_at_seconds": 240.25578829098959,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 80.45392102240844,
+            "recognizeSeconds": 0.2485895,
+            "id": "paced-3-12",
+            "text": "My Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the update.",
+            "rawText": "My Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the update."
+          }
+        },
+        {
+          "index": 13,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 260.0,
+          "queue_wait_seconds": 0.005058540962636471,
+          "round_trip_seconds": 0.20619854202959687,
+          "completed_at_seconds": 260.21125708299223,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 97.54160622582322,
+            "recognizeSeconds": 0.205040708,
+            "id": "paced-3-13",
+            "text": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely.",
+            "rawText": "I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely."
+          }
+        },
+        {
+          "index": 14,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 280.0,
+          "queue_wait_seconds": 0.005052707972936332,
+          "round_trip_seconds": 0.20988654205575585,
+          "completed_at_seconds": 280.2149392500287,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 96.08961348101916,
+            "recognizeSeconds": 0.208139041,
+            "id": "paced-3-14",
+            "text": "These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the",
+            "rawText": "These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the"
+          }
+        },
+        {
+          "index": 15,
+          "final": false,
+          "audio_seconds": 20.0,
+          "available_at_seconds": 300.0,
+          "queue_wait_seconds": 0.005031083011999726,
+          "round_trip_seconds": 0.24417824996635318,
+          "completed_at_seconds": 300.24920933297835,
+          "response": {
+            "durationSeconds": 20,
+            "speedup": 82.44204313032157,
+            "recognizeSeconds": 0.242594667,
+            "id": "paced-3-15",
+            "text": "updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs in.",
+            "rawText": "updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs in."
+          }
+        },
+        {
+          "index": 16,
+          "final": true,
+          "audio_seconds": 19.44999999999999,
+          "available_at_seconds": 319.45,
+          "queue_wait_seconds": 0.005016333027754172,
+          "round_trip_seconds": 0.21550129202660173,
+          "completed_at_seconds": 319.67051762505434,
+          "response": {
+            "durationSeconds": 19.45,
+            "speedup": 90.65792248864153,
+            "recognizeSeconds": 0.21454275,
+            "id": "paced-3-16",
+            "text": "Entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule.",
+            "rawText": "Entirely on my Mac. These are the notes for the next meeting. We need to finish the draft, review the schedule, and send the updated document tomorrow morning. I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac, these are the notes for the next meeting. We need to finish the draft, review the schedule."
+          }
+        }
+      ],
+      "release_to_result_seconds": 0.6705176250543445,
+      "chunks_completed_before_release": 15
+    }
+  ],
+  "model_load_seconds": 17.040305125061423
+}

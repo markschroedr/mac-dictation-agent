@@ -24,6 +24,7 @@ vendor/permanent-transcriber/.state/
 vendor/permanent-transcriber/storage/
 
 # Local transcription and benchmark output
+benchmark-audio/
 batch-*/
 chunk-bench-*/
 debug-audio/

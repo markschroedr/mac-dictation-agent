@@ -12,5 +12,5 @@ mkdir -p "$ROOT/assets/demo/raw"
     --output "$RAW"
 )
 
-DEMO_START=0 DEMO_POSTER_AT=10.1 \
+DEMO_START=0 DEMO_POSTER_AT=5 \
   bash "$ROOT/scripts/demo/render_demo.sh" "$RAW"

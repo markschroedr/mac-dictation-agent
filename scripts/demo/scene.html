@@ -70,9 +70,16 @@
 <script>
   const states = {
     idle:["Ready","Hold Control+Shift and speak","on-device","no cloud round-trip"],
-    listening:["Listening locally…","Release the keys when you are done","6.70 sec","captured audio"],
-    transcribing:["Transcribing on your Mac…","Parakeet is running through Core ML","0.53 sec","median warm run"],
-    done:["Pasted at the cursor","The app returns to the menu bar","12.5×","real-time speed"]
+    listening:["Listening locally…","Release the keys when you are done","on-device","your voice stays here"],
+    transcribing:["Finishing…","Release the shortcut. That's it.","on-device","no cloud round-trip"],
+    done:["Pasted at the cursor","Ready to edit or send","one paste","all your words at once"]
+  };
+  window.pasteTranscript = () => {
+    const editor = document.querySelector("#editor");
+    editor.focus();
+    editor.setSelectionRange(editor.value.length, editor.value.length);
+    editor.setRangeText("I wanted dictation to feel like a keyboard shortcut, so I built one that runs entirely on my Mac.", editor.selectionStart, editor.selectionEnd, "end");
+    setState("done");
   };
   window.setState = (name) => {
     document.body.dataset.state = name;

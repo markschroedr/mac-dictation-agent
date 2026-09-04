@@ -11,8 +11,11 @@ bash scripts/demo/render_isolated_demo.sh
 ```
 
 The renderer creates MP4, WebM, GIF, and poster assets from one storyboard.
-The sentence and timing come from the reproducible local benchmark in
-[`docs/BENCHMARKS.md`](../../docs/BENCHMARKS.md).
+The listening phase is shortened for the illustration. The finishing phase lasts
+0.65 seconds, based on the paced helper measurements in
+[`docs/BENCHMARKS.md`](../../docs/BENCHMARKS.md). The full sentence appears in
+one operation, matching the app's paste behavior. There is no typing animation.
+This is not a measurement of the receiving application's paste latency.
 
 Use the normal shortcut for real end-to-end verification. Use the benchmark
 script for measured transcription speed. Keep those checks separate from this

@@ -71,6 +71,8 @@ rsync -a \
   "$RUNTIME_ROOT/"
 rsync -a \
   "$SOURCE_ROOT/docs/PRIVACY.md" \
+  "$SOURCE_ROOT/docs/USAGE.md" \
+  "$SOURCE_ROOT/docs/BENCHMARKS.md" \
   "$RUNTIME_ROOT/docs/"
 rsync -a \
   "$SOURCE_ROOT/THIRD_PARTY_LICENSES/" \
@@ -87,6 +89,8 @@ rsync -a \
   "$PRODUCT_ROOT/"
 rsync -a \
   "$SOURCE_ROOT/docs/PRIVACY.md" \
+  "$SOURCE_ROOT/docs/USAGE.md" \
+  "$SOURCE_ROOT/docs/BENCHMARKS.md" \
   "$PRODUCT_ROOT/docs/"
 rsync -a \
   "$SOURCE_ROOT/THIRD_PARTY_LICENSES/" \
