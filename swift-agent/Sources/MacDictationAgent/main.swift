@@ -470,13 +470,7 @@ final class SecretResolver {
     }
 
     private static func candidateEnvFiles() -> [URL] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return [
-            ttsEnvFile,
-            agentRoot.appendingPathComponent(".env"),
-            home.appendingPathComponent(".secrets"),
-            home.appendingPathComponent(".config/mac-dictation-agent/tts.env"),
-        ]
+        [ttsEnvFile]
     }
 
     private static func value(for key: String, in fileURL: URL) -> String? {

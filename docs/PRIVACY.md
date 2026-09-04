@@ -69,7 +69,7 @@ All paths are below:
 
 ## Credentials
 
-Optional cloud TTS credentials live in:
+Optional cloud TTS credentials come from the app process environment or live in:
 
 ```txt
 ~/Library/Application Support/Mac Dictation Agent/runtime/tts.env
