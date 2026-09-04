@@ -23,12 +23,12 @@ let dataRoot = ProcessInfo.processInfo.environment["MAC_DICTATION_DATA_ROOT"].ma
     URL(fileURLWithPath: $0)
 } ?? applicationSupportRoot
 let workerDir = agentRoot.appendingPathComponent("asr_worker")
-let logDir = agentRoot.appendingPathComponent("logs")
+let logDir = dataRoot.appendingPathComponent("logs")
 let debugAudioDir = dataRoot.appendingPathComponent("recordings/debug")
 let retainedAudioDir = dataRoot.appendingPathComponent("recordings/retained")
 let successfulAudioDir = dataRoot.appendingPathComponent("recordings/successful")
 let ttsAudioDir = dataRoot.appendingPathComponent("tts-audio")
-let ttsEnvFile = agentRoot.appendingPathComponent("tts.env")
+let ttsEnvFile = dataRoot.appendingPathComponent("tts.env")
 let dictationTranscriptsDir = dataRoot.appendingPathComponent("transcripts/dictation")
 let manualTranscriptsDir = dataRoot.appendingPathComponent("transcripts/manual-files")
 let bundledPermanentTranscriberDataRoot = dataRoot.appendingPathComponent("permanent-transcriber")
@@ -364,6 +364,38 @@ enum TTSLanguage: String, CaseIterable, Sendable {
     }
 }
 
+enum QuickTTSPreset: String, CaseIterable {
+    case supertonicM1, inworldConfigured, xaiLeo
+
+    var provider: TTSProvider {
+        switch self {
+        case .supertonicM1: return .supertonic
+        case .inworldConfigured: return .inworld
+        case .xaiLeo: return .xai
+        }
+    }
+
+    var voiceID: String? {
+        switch self {
+        case .supertonicM1: return "M1"
+        case .inworldConfigured: return nil
+        case .xaiLeo: return "leo"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .supertonicM1: return "Supertonic 3 — M1 (local)"
+        case .inworldConfigured: return "Inworld — Configured Voice (cloud)"
+        case .xaiLeo: return "Grok/xAI — Leo (cloud)"
+        }
+    }
+
+    static func current() -> QuickTTSPreset? {
+        UserDefaults.standard.string(forKey: "quickTTSPreset").flatMap(QuickTTSPreset.init(rawValue:))
+    }
+}
+
 enum ClipboardTTSError: Error, CustomStringConvertible {
     case emptyClipboard
     case alreadyRunning
@@ -539,6 +571,7 @@ final class LocalTTSClient {
     func synthesize(
         text: String,
         language: TTSLanguage,
+        voiceID: String? = nil,
         outputURL: URL
     ) throws -> Int {
         cancelIdleShutdown()
@@ -557,6 +590,7 @@ final class LocalTTSClient {
             action: .synthesize,
             input: text,
             language: serviceLanguage,
+            voice: voiceID,
             outputPath: outputURL.path
         )
 
@@ -886,6 +920,7 @@ final class ClipboardTTSManager {
 
     func speakClipboard(
         provider: TTSProvider,
+        voiceID: String? = nil,
         progress: @escaping @Sendable (_ completed: Int, _ total: Int) -> Void,
         completion: @escaping @Sendable (_ errorDescription: String?) -> Void
     ) {
@@ -897,6 +932,7 @@ final class ClipboardTTSManager {
                     text: text,
                     provider: provider,
                     language: selectedLanguage,
+                    voiceID: voiceID,
                     play: true,
                     progress: progress
                 )
@@ -914,6 +950,7 @@ final class ClipboardTTSManager {
         text: String,
         provider: TTSProvider,
         language: TTSLanguage,
+        voiceID: String? = nil,
         play: Bool,
         progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
     ) throws -> TTSRunResult {
@@ -971,6 +1008,7 @@ final class ClipboardTTSManager {
                 chunks,
                 provider: provider,
                 language: effectiveLanguage,
+                voiceID: voiceID,
                 runDir: runDir,
                 progress: progress
             )
@@ -984,6 +1022,7 @@ final class ClipboardTTSManager {
                 chunks,
                 provider: provider,
                 language: effectiveLanguage,
+                voiceID: voiceID,
                 apiKey: apiKey,
                 runDir: runDir,
                 progress: progress
@@ -1017,6 +1056,7 @@ final class ClipboardTTSManager {
         _ chunks: [String],
         provider: TTSProvider,
         language: TTSLanguage,
+        voiceID: String?,
         runDir: URL,
         progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?
     ) throws -> [URL] {
@@ -1031,6 +1071,7 @@ final class ClipboardTTSManager {
             let byteCount = try supertonic.synthesize(
                 text: chunk,
                 language: language,
+                voiceID: voiceID,
                 outputURL: chunkURL
             )
             chunkFiles.append(chunkURL)
@@ -1049,6 +1090,7 @@ final class ClipboardTTSManager {
         _ chunks: [String],
         provider: TTSProvider,
         language: TTSLanguage,
+        voiceID: String?,
         apiKey: String,
         runDir: URL,
         progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?
@@ -1079,6 +1121,7 @@ final class ClipboardTTSManager {
                             chunk: job.text,
                             provider: provider,
                             language: language,
+                            voiceID: voiceID,
                             apiKey: apiKey
                         )
                         try audioData.write(to: job.outputURL, options: .atomic)
@@ -1263,6 +1306,7 @@ final class ClipboardTTSManager {
         chunk text: String,
         provider: TTSProvider,
         language: TTSLanguage,
+        voiceID: String?,
         apiKey: String
     ) throws -> Data {
         switch provider {
@@ -1271,14 +1315,14 @@ final class ClipboardTTSManager {
                 "\(provider.displayName) must use the local service"
             )
         case .inworld:
-            return try synthesizeInworld(text: text, language: language, apiKey: apiKey)
+            return try synthesizeInworld(text: text, language: language, voiceOverride: voiceID, apiKey: apiKey)
         case .xai:
-            return try synthesizeXAI(text: text, language: language, apiKey: apiKey)
+            return try synthesizeXAI(text: text, language: language, voiceOverride: voiceID, apiKey: apiKey)
         }
     }
 
-    private func synthesizeInworld(text: String, language: TTSLanguage, apiKey: String) throws -> Data {
-        let voiceID = configuredVoiceID(
+    private func synthesizeInworld(text: String, language: TTSLanguage, voiceOverride: String?, apiKey: String) throws -> Data {
+        let voiceID = voiceOverride ?? configuredVoiceID(
             keys: [
                 "MAC_DICTATION_INWORLD_\(language.rawValue.uppercased())_VOICE_ID",
                 "MAC_DICTATION_INWORLD_VOICE_ID",
@@ -1321,8 +1365,8 @@ final class ClipboardTTSManager {
         return audio
     }
 
-    private func synthesizeXAI(text: String, language: TTSLanguage, apiKey: String) throws -> Data {
-        let voiceID = configuredVoiceID(
+    private func synthesizeXAI(text: String, language: TTSLanguage, voiceOverride: String?, apiKey: String) throws -> Data {
+        let voiceID = voiceOverride ?? configuredVoiceID(
             keys: [
                 "MAC_DICTATION_XAI_\(language.rawValue.uppercased())_VOICE_ID",
                 "MAC_DICTATION_XAI_VOICE_ID",
@@ -3383,6 +3427,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let permanentTranscriber: PermanentTranscriberController
     private let statusItem: NSStatusItem
     private let appStatusItem = NSMenuItem(title: "Ready", action: nil, keyEquivalent: "")
+    private let quickTTSItem = NSMenuItem(title: "Quick Speak Clipboard…", action: #selector(speakClipboardQuick), keyEquivalent: "")
+    private var quickVoiceItems: [QuickTTSPreset: NSMenuItem] = [:]
     private let startAtLoginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin), keyEquivalent: "")
     private let permanentTranscriberStatusItem = NSMenuItem(title: "Status: Stopped", action: nil, keyEquivalent: "")
     private let permanentTranscriberModeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
@@ -3446,6 +3492,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(hint)
         menu.addItem(.separator())
 
+        quickTTSItem.target = self
+        menu.addItem(quickTTSItem)
+        updateQuickVoice()
+
         let transcribeAudioFile = NSMenuItem(title: "Transcribe Audio File...", action: #selector(transcribeAudioFile), keyEquivalent: "")
         transcribeAudioFile.target = self
         menu.addItem(transcribeAudioFile)
@@ -3472,6 +3522,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         ttsActionItems[.xai] = speakXAI
 
         speakClipboardMenu.addItem(.separator())
+        let quickVoice = NSMenuItem(title: "Quick Voice", action: nil, keyEquivalent: "")
+        let quickVoiceMenu = NSMenu()
+        for preset in QuickTTSPreset.allCases {
+            let item = NSMenuItem(title: preset.displayName, action: #selector(selectQuickVoice), keyEquivalent: "")
+            item.target = self
+            item.representedObject = preset.rawValue
+            quickVoiceMenu.addItem(item)
+            quickVoiceItems[preset] = item
+        }
+        quickVoice.submenu = quickVoiceMenu
+        speakClipboardMenu.addItem(quickVoice)
+        let setup = NSMenuItem(title: "Set Up Voices and API Keys…", action: #selector(openTTSSetup), keyEquivalent: "")
+        setup.target = self
+        speakClipboardMenu.addItem(setup)
         let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         let languageMenu = NSMenu()
         for language in TTSLanguage.allCases {
@@ -3585,6 +3649,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        updateQuickVoice()
         rebuildRecentMenus()
         rebuildMicrophoneMenu()
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
@@ -3637,8 +3702,70 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         startTTS(provider: .xai)
     }
 
-    private func startTTS(provider: TTSProvider) {
+    @objc private func selectQuickVoice(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let preset = QuickTTSPreset(rawValue: raw) else { return }
+        UserDefaults.standard.set(preset.rawValue, forKey: "quickTTSPreset")
+        updateQuickVoice()
+    }
+
+    private func updateQuickVoice() {
+        let current = QuickTTSPreset.current()
+        quickTTSItem.title = current.map { "Quick Speak — \($0.displayName)" } ?? "Quick Speak Clipboard…"
+        for (preset, item) in quickVoiceItems {
+            item.state = preset == current ? .on : .off
+        }
+    }
+
+    @objc private func speakClipboardQuick() {
+        guard let preset = QuickTTSPreset.current() else {
+            let alert = NSAlert()
+            alert.messageText = "Choose a Quick Voice first"
+            alert.informativeText = "Select a voice under Speak Clipboard → Quick Voice. Cloud voices send clipboard text to the selected provider only when you start speaking."
+            alert.runModal()
+            return
+        }
+        startTTS(provider: preset.provider, voiceID: preset.voiceID)
+    }
+
+    @objc private func openTTSSetup() {
+        let alert = NSAlert()
+        alert.messageText = "Set up text-to-speech"
+        alert.informativeText = "Local speech: install uv and ffmpeg, then run Install Optional Tools.command from the download. Supertonic downloads its model on first use.\n\nCloud speech: add INWORLD_API_KEY or XAI_API_KEY to the dedicated key file. Cloud voices send your clipboard text to that provider.\n\nChoose a Quick Voice from the Speak Clipboard menu. No provider is selected automatically."
+        alert.addButton(withTitle: "Done")
+        alert.addButton(withTitle: "Edit API Keys")
+        alert.addButton(withTitle: "Setup Guide")
+        switch alert.runModal() {
+        case .alertSecondButtonReturn:
+            do {
+                try FileManager.default.createDirectory(at: ttsEnvFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if !FileManager.default.fileExists(atPath: ttsEnvFile.path) {
+                    let template = "# Optional cloud speech credentials. Keep this file private.\n# INWORLD_API_KEY=\n# XAI_API_KEY=\n"
+                    guard FileManager.default.createFile(atPath: ttsEnvFile.path, contents: Data(template.utf8), attributes: [.posixPermissions: 0o600]) else {
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                }
+                NSWorkspace.shared.open(ttsEnvFile)
+            } catch {
+                let failure = NSAlert(error: error)
+                failure.runModal()
+            }
+        case .alertThirdButtonReturn:
+            NSWorkspace.shared.open(URL(string: "https://github.com/markschroedr/mac-dictation-agent/blob/main/docs/USAGE.md#text-to-speech")!)
+        default: break
+        }
+    }
+
+    private func startTTS(provider: TTSProvider, voiceID: String? = nil) {
         guard !isTTSProcessing else {
+            return
+        }
+        if provider.isLocal && !FileManager.default.isExecutableFile(atPath: supertonicTTSServiceExecutable.path) {
+            openTTSSetup()
+            return
+        }
+        if let key = provider.secretName, SecretResolver.value(for: key) == nil {
+            openTTSSetup()
             return
         }
         let language = TTSLanguage.current()
@@ -3658,6 +3785,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         tts.speakClipboard(
             provider: provider,
+            voiceID: voiceID,
             progress: { [weak self] completed, total in
                 DispatchQueue.main.async {
                     guard let self, self.isTTSProcessing else { return }

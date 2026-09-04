@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 - 2026-09-05
+
+- Added configurable Quick Speak Clipboard presets without a default cloud provider.
+- Added voice setup guidance and access to the dedicated API key file.
+- Added Supertonic service identification for shared-service consumers.
+- Separated installation preparation from activation. Preparation never stops an existing app or service.
+- Kept prepared virtual environments at stable runtime paths.
+- Preserved the previous app and launch configuration during updates and uninstalls.
+- Removed port-based shutdown of unrelated ASR services.
+
 ## 0.1.1 - 2026-09-04
 
 ### Continuous transcription

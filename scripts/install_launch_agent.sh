@@ -1,274 +1,221 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 SOURCE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DATA_ROOT="${MAC_DICTATION_DATA_ROOT:-$HOME/Library/Application Support/Mac Dictation Agent}"
-INSTALL_ROOT="${MAC_DICTATION_INSTALL_ROOT:-$DATA_ROOT/runtime}"
-MODEL_ROOT="${MAC_DICTATION_MODEL_ROOT:-$DATA_ROOT/models}"
-FLUID_MODEL_ROOT="${MAC_DICTATION_FLUID_MODEL_ROOT:-$MODEL_ROOT/fluid-audio}"
-SUPERTONIC_TTS_MODEL_ROOT="${MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT:-$MODEL_ROOT/supertonic-3}"
-LOCAL_TTS_IDLE_SECONDS="${MAC_DICTATION_TTS_IDLE_SECONDS:-300}"
-LAUNCH_AGENT_LABEL="${MAC_DICTATION_LAUNCH_AGENT_LABEL:-com.markschroedr.mac-dictation}"
-PLIST="${MAC_DICTATION_PLIST:-$HOME/Library/LaunchAgents/$LAUNCH_AGENT_LABEL.plist}"
-APP_DIR="${MAC_DICTATION_APP_DIR:-$HOME/Applications/MacDictationAgent.app}"
-PREBUILT_APP="${MAC_DICTATION_PREBUILT_APP:-}"
-ACTIVATE="${MAC_DICTATION_ACTIVATE:-1}"
-WARM_MODELS="${MAC_DICTATION_WARM_MODELS:-0}"
-ASR_PORT="${MAC_DICTATION_ASR_PORT:-8766}"
-INSTALL_EXTRAS="${MAC_DICTATION_INSTALL_EXTRAS:-1}"
-APP_BIN="$APP_DIR/Contents/MacOS/MacDictationAgent"
-APP_HELPER="$APP_DIR/Contents/Helpers/FluidDictationService"
 
-stop_installed_processes() {
-  local executable_name="$1"
-  local executable_path="$2"
-  local pid command
-  local -a matching_pids=()
-
-  while read -r pid; do
-    [[ -n "$pid" ]] || continue
-    command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
-    if [[ "$command" == "$executable_path" || "$command" == "$executable_path "* ]]; then
-      matching_pids+=("$pid")
-    fi
-  done < <(pgrep -x "$executable_name" 2>/dev/null || true)
-
-  ((${#matching_pids[@]} == 0)) && return
-  kill -TERM "${matching_pids[@]}" 2>/dev/null || true
-  for _ in {1..20}; do
-    local -a survivors=()
-    for pid in "${matching_pids[@]}"; do
-      kill -0 "$pid" 2>/dev/null && survivors+=("$pid")
-    done
-    ((${#survivors[@]} == 0)) && return
-    matching_pids=("${survivors[@]}")
-    sleep 0.1
+# Preparation writes only a new, persistent runtime directory. Virtual environments
+# stay at this path after activation; moving them would break their entry points.
+if [[ "${1:-}" != "--activate" ]]; then
+  [[ $# == 0 ]] || { echo "usage: $0 [--activate]" >&2; exit 2; }
+  DATA_ROOT="${MAC_DICTATION_DATA_ROOT:-$HOME/Library/Application Support/Mac Dictation Agent}"
+  ROOT="${MAC_DICTATION_INSTALL_ROOT:-$DATA_ROOT/runtimes/$(uuidgen)}"
+  APP_DIR="${MAC_DICTATION_APP_DIR:-$HOME/Applications/MacDictationAgent.app}"
+  LABEL="${MAC_DICTATION_LAUNCH_AGENT_LABEL:-com.markschroedr.mac-dictation}"
+  PLIST="${MAC_DICTATION_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
+  MODEL_ROOT="${MAC_DICTATION_MODEL_ROOT:-$DATA_ROOT/models}"
+  FLUID_ROOT="${MAC_DICTATION_FLUID_MODEL_ROOT:-$MODEL_ROOT/fluid-audio}"
+  TTS_ROOT="${MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT:-$MODEL_ROOT/supertonic-3}"
+  EXTRAS="${MAC_DICTATION_INSTALL_EXTRAS:-1}"
+  PREBUILT="${MAC_DICTATION_PREBUILT_APP:-}"
+  [[ ! -e "$ROOT" && ! -L "$ROOT" ]] || { echo "Preparation requires a new runtime directory: $ROOT" >&2; exit 1; }
+  for dependency in rsync codesign plutil; do
+    command -v "$dependency" >/dev/null || { echo "Missing tool: $dependency" >&2; exit 1; }
   done
-  kill -KILL "${matching_pids[@]}" 2>/dev/null || true
-}
-
-stop_installed_process_path() {
-  local executable_path="$1"
-  local pid command
-  local -a matching_pids=()
-
-  while read -r pid command; do
-    [[ -n "$pid" ]] || continue
-    if [[
-      "$command" == "$executable_path"
-      || "$command" == "$executable_path "*
-      || "$command" == *" $executable_path"
-      || "$command" == *" $executable_path "*
-    ]]; then
-      matching_pids+=("$pid")
-    fi
-  done < <(ps -axo pid=,command= 2>/dev/null || true)
-
-  ((${#matching_pids[@]} == 0)) && return
-  kill -TERM "${matching_pids[@]}" 2>/dev/null || true
-}
-
-DEPENDENCIES=(rsync codesign curl)
-if [[ "$INSTALL_EXTRAS" == "1" ]]; then
-  DEPENDENCIES+=(uv ffmpeg)
-fi
-if [[ -z "$PREBUILT_APP" ]]; then
-  DEPENDENCIES+=(swift iconutil)
-fi
-for dependency in "${DEPENDENCIES[@]}"; do
-  if ! command -v "$dependency" >/dev/null 2>&1; then
-    echo "missing required command: $dependency" >&2
-    exit 1
-  fi
-done
-
-if [[ "${1:-}" != "--installed" && "$SOURCE_ROOT" != "$INSTALL_ROOT" ]]; then
-  launchctl bootout "gui/$(id -u)/$LAUNCH_AGENT_LABEL" 2>/dev/null || true
-  stop_installed_processes "MacDictationAgent" "$APP_BIN"
-  stop_installed_processes "FluidDictationService" "$APP_HELPER"
-  stop_installed_process_path "$INSTALL_ROOT/supertonic_worker/.venv/bin/supertonic-tts-worker"
-  PERMANENT_WAS_STOPPED=0
-  OLD_PERMANENT_TRANSCRIBER="$INSTALL_ROOT/vendor/permanent-transcriber/.venv/bin/permanent-transcriber"
-  if [[ -x "$OLD_PERMANENT_TRANSCRIBER" ]]; then
-    OLD_STATUS="$(PERMANENT_TRANSCRIBER_ROOT="$DATA_ROOT/permanent-transcriber" "$OLD_PERMANENT_TRANSCRIBER" status)"
-    if printf '%s' "$OLD_STATUS" | /usr/bin/python3 -c '
-import json
-import sys
-
-status = json.load(sys.stdin)
-running = status["capture"]["running"] or any(worker["running"] for worker in status["workers"].values())
-raise SystemExit(0 if running else 1)
-'; then
-      if ! PERMANENT_TRANSCRIBER_ROOT="$DATA_ROOT/permanent-transcriber" \
-        "$OLD_PERMANENT_TRANSCRIBER" stop >/dev/null; then
-        echo "could not stop continuous transcription; installation aborted" >&2
-        exit 1
-      fi
-      PERMANENT_WAS_STOPPED=1
-    fi
-  fi
-  if curl -fsS "http://127.0.0.1:$ASR_PORT/health" >/dev/null 2>&1; then
-    curl -fsS -X POST "http://127.0.0.1:$ASR_PORT/shutdown" >/dev/null
-    for _ in {1..200}; do
-      if ! curl -fsS "http://127.0.0.1:$ASR_PORT/health" >/dev/null 2>&1; then
-        break
-      fi
-      sleep 0.05
+  if [[ "$EXTRAS" == 1 ]]; then
+    for dependency in uv ffmpeg; do
+      command -v "$dependency" >/dev/null || { echo "Install optional tools first: brew install uv ffmpeg" >&2; exit 1; }
     done
-    if curl -fsS "http://127.0.0.1:$ASR_PORT/health" >/dev/null 2>&1; then
-      echo "could not stop the ASR worker; installation aborted" >&2
-      exit 1
+  fi
+  mkdir -p "$ROOT/vendor"
+  # Explicit product allowlist. Never mirror a checkout or delete destination data.
+  for directory in asr_worker supertonic_worker scripts docs; do
+    rsync -a --exclude .venv --exclude __pycache__ --exclude .pytest_cache \
+      --exclude '*.log' --exclude .env --exclude tts.env \
+      "$SOURCE_ROOT/$directory/" "$ROOT/$directory/"
+  done
+  rsync -a --exclude .venv --exclude __pycache__ --exclude .pytest_cache \
+    --exclude .state --exclude storage --exclude '*.log' \
+    "$SOURCE_ROOT/vendor/permanent-transcriber/" "$ROOT/vendor/permanent-transcriber/"
+  for file in LICENSE README.md THIRD_PARTY_NOTICES.md CHANGELOG.md VERSION; do
+    cp "$SOURCE_ROOT/$file" "$ROOT/$file"
+  done
+  for directory in THIRD_PARTY_LICENSES assets; do
+    if [[ -d "$SOURCE_ROOT/$directory" ]]; then
+      rsync -a --exclude raw "$SOURCE_ROOT/$directory/" "$ROOT/$directory/"
+    fi
+  done
+  if [[ "$EXTRAS" == 1 ]]; then
+    for project in asr_worker supertonic_worker vendor/permanent-transcriber; do
+      (cd "$ROOT/$project" && uv sync --frozen)
+    done
+  fi
+  if [[ -n "$PREBUILT" ]]; then
+    codesign --verify --deep --strict "$PREBUILT"
+    rsync -a "$PREBUILT/" "$ROOT/MacDictationAgent.app/"
+  else
+    MAC_DICTATION_APP_DIR="$ROOT/MacDictationAgent.app" \
+      bash "$SOURCE_ROOT/scripts/build_app_bundle.sh"
+  fi
+  codesign --verify --deep --strict "$ROOT/MacDictationAgent.app"
+  [[ -x "$ROOT/MacDictationAgent.app/Contents/MacOS/MacDictationAgent" ]]
+  [[ -x "$ROOT/MacDictationAgent.app/Contents/Helpers/FluidDictationService" ]]
+
+  PLAN="$ROOT/installation.plist"
+  plutil -create xml1 "$PLAN"
+  plutil -insert TargetApp -string "$APP_DIR" "$PLAN"
+  plutil -insert TargetPlist -string "$PLIST" "$PLAN"
+  plutil -insert DataRoot -string "$DATA_ROOT" "$PLAN"
+  plutil -insert RuntimeLink -string "$DATA_ROOT/runtime" "$PLAN"
+  STAGED_PLIST="$ROOT/launch.plist"
+  plutil -create xml1 "$STAGED_PLIST"
+  plutil -insert Label -string "$LABEL" "$STAGED_PLIST"
+  plutil -insert ProgramArguments -json '[]' "$STAGED_PLIST"
+  plutil -insert ProgramArguments.0 -string "$APP_DIR/Contents/MacOS/MacDictationAgent" "$STAGED_PLIST"
+  plutil -insert EnvironmentVariables -json '{}' "$STAGED_PLIST"
+  add_env() { plutil -insert "EnvironmentVariables.$1" -string "$2" "$STAGED_PLIST"; }
+  add_env PATH "$PATH"
+  add_env MAC_DICTATION_AGENT_ROOT "$ROOT"
+  add_env MAC_DICTATION_DATA_ROOT "$DATA_ROOT"
+  add_env MAC_DICTATION_MODEL_ROOT "$MODEL_ROOT"
+  add_env MAC_DICTATION_FLUID_MODEL_ROOT "$FLUID_ROOT"
+  add_env MAC_DICTATION_FLUID_SERVICE_BIN "$APP_DIR/Contents/Helpers/FluidDictationService"
+  add_env MAC_DICTATION_SUPERTONIC_TTS_SERVICE_BIN "$ROOT/supertonic_worker/.venv/bin/supertonic-tts-worker"
+  add_env MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT "$TTS_ROOT"
+  add_env MAC_DICTATION_TTS_IDLE_SECONDS "${MAC_DICTATION_TTS_IDLE_SECONDS:-300}"
+  add_env MAC_DICTATION_ASR_PORT "${MAC_DICTATION_ASR_PORT:-8766}"
+  add_env MAC_DICTATION_LAUNCH_AGENT_LABEL "$LABEL"
+  plutil -insert RunAtLoad -bool true "$STAGED_PLIST"
+  plutil -insert KeepAlive -bool true "$STAGED_PLIST"
+  plutil -insert StandardOutPath -string "$DATA_ROOT/logs/agent.out.log" "$STAGED_PLIST"
+  plutil -insert StandardErrorPath -string "$DATA_ROOT/logs/agent.err.log" "$STAGED_PLIST"
+  # Credentials belong to the data root, not replaceable application code.
+  ln -s "$DATA_ROOT/tts.env" "$ROOT/tts.env"
+  plutil -lint "$PLAN" "$STAGED_PLIST"
+  echo "Prepared runtime: $ROOT"
+  echo "Activate with: bash \"$ROOT/scripts/install_launch_agent.sh\" --activate"
+  if [[ "${MAC_DICTATION_ACTIVATE:-1}" != 1 ]]; then
+    echo "Preparation only. No app, service, launch configuration, or existing data was changed."
+    exit 0
+  fi
+  exec bash "$ROOT/scripts/install_launch_agent.sh" --activate
+fi
+
+# Activation is deliberately separate. A failed prepare cannot stop the live app.
+ROOT="$SOURCE_ROOT"
+PLAN="$ROOT/installation.plist"
+[[ -f "$PLAN" && -d "$ROOT/MacDictationAgent.app" ]] || { echo "No prepared installation at $ROOT" >&2; exit 1; }
+APP_DIR="$(plutil -extract TargetApp raw "$PLAN")"
+PLIST="$(plutil -extract TargetPlist raw "$PLAN")"
+DATA_ROOT="$(plutil -extract DataRoot raw "$PLAN")"
+RUNTIME_LINK="$(plutil -extract RuntimeLink raw "$PLAN")"
+LABEL="$(plutil -extract Label raw "$ROOT/launch.plist")"
+[[ -n "$LABEL" && "$APP_DIR" == /*.app && "$PLIST" == /*.plist ]] || { echo "Invalid activation paths or label" >&2; exit 1; }
+plutil -lint "$ROOT/launch.plist" >/dev/null
+APP_BIN="$APP_DIR/Contents/MacOS/MacDictationAgent"
+codesign --verify --deep --strict "$ROOT/MacDictationAgent.app"
+
+# Refuse to take over a launch label that belongs to another executable.
+if [[ -f "$PLIST" ]]; then
+  OLD_BIN="$(plutil -extract ProgramArguments.0 raw "$PLIST")"
+  OLD_LABEL="$(plutil -extract Label raw "$PLIST")"
+  [[ "$OLD_LABEL" == "$LABEL" ]] || { echo "Existing LaunchAgent has a different label; migrate it explicitly" >&2; exit 1; }
+  [[ "$OLD_BIN" == "$APP_BIN" ]] || { echo "LaunchAgent belongs to another app; refusing activation" >&2; exit 1; }
+  OLD_ROOT="$(plutil -extract EnvironmentVariables.MAC_DICTATION_AGENT_ROOT raw "$PLIST")"
+  OLD_DATA="$(plutil -extract EnvironmentVariables.MAC_DICTATION_DATA_ROOT raw "$PLIST")"
+  OLD_TRANSCRIBER="$OLD_ROOT/vendor/permanent-transcriber/.venv/bin/permanent-transcriber"
+fi
+
+BACKUP="$DATA_ROOT/installation-backups/$(uuidgen)"
+mkdir -p "$BACKUP" "$(dirname "$APP_DIR")" "$(dirname "$PLIST")" "$DATA_ROOT/logs"
+if [[ -e "$RUNTIME_LINK" && ! -L "$RUNTIME_LINK" ]]; then
+  echo "Legacy runtime directory needs explicit migration before activation: $RUNTIME_LINK" >&2
+  exit 1
+fi
+# Refuse credential collisions instead of silently replacing either configuration.
+if [[ -n "${OLD_ROOT:-}" && -f "$OLD_ROOT/tts.env" && -f "$DATA_ROOT/tts.env" ]]; then
+  cmp -s "$OLD_ROOT/tts.env" "$DATA_ROOT/tts.env" || {
+    echo "Credential files differ; reconcile them privately before activation" >&2; exit 1;
+  }
+fi
+if [[ -n "${OLD_ROOT:-}" && -f "$OLD_ROOT/tts.env" && ! -e "$DATA_ROOT/tts.env" ]]; then
+  cp -p "$OLD_ROOT/tts.env" "$DATA_ROOT/tts.env"
+  chmod 600 "$DATA_ROOT/tts.env"
+fi
+# Preserve the complete previous app and launch configuration for rollback.
+if [[ -f "$PLIST" ]]; then cp -p "$PLIST" "$BACKUP/launch.plist"; fi
+if [[ -L "$RUNTIME_LINK" ]]; then readlink "$RUNTIME_LINK" > "$BACKUP/runtime-target"; fi
+rollback() {
+  local result=$?
+  trap - ERR
+  echo "Activation failed; restoring the previous installation from $BACKUP" >&2
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  if [[ -d "$BACKUP/MacDictationAgent.app" ]]; then
+    if [[ -e "$APP_DIR" ]]; then mv "$APP_DIR" "$ROOT/failed-application.app"; fi
+    mv "$BACKUP/MacDictationAgent.app" "$APP_DIR"
+  fi
+  if [[ -L "$RUNTIME_LINK" ]]; then mv "$RUNTIME_LINK" "$BACKUP/failed-runtime-link"; fi
+  if [[ -f "$BACKUP/runtime-target" ]]; then
+    local previous
+    IFS= read -r previous < "$BACKUP/runtime-target"
+    ln -s "$previous" "$RUNTIME_LINK"
+  fi
+  if [[ -f "$BACKUP/launch.plist" ]]; then
+    cp -p "$BACKUP/launch.plist" "$PLIST"
+    launchctl bootstrap "gui/$(id -u)" "$PLIST" || true
+  elif [[ -f "$PLIST" ]]; then
+    mv "$PLIST" "$BACKUP/failed-launch.plist"
+  fi
+  exit "$result"
+}
+if [[ -n "${OLD_TRANSCRIBER:-}" && -x "$OLD_TRANSCRIBER" ]]; then
+  STATUS="$(PERMANENT_TRANSCRIBER_ROOT="$OLD_DATA/permanent-transcriber" "$OLD_TRANSCRIBER" status)"
+  RUNNING=0
+  for field in capture.running workers.quick.running workers.relaxed.running; do
+    if [[ "$(plutil -extract "$field" raw -o - - <<< "$STATUS")" == true ]]; then RUNNING=1; fi
+  done
+  if [[ "$RUNNING" == 1 ]]; then
+    # The transcriber validates process identity and drains durable segments.
+    PERMANENT_TRANSCRIBER_ROOT="$OLD_DATA/permanent-transcriber" "$OLD_TRANSCRIBER" stop
+  fi
+fi
+trap rollback ERR
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+while read -r pid; do
+  [[ -n "$pid" ]] || continue
+  executable="$(ps -p "$pid" -o comm= 2>/dev/null || true)"
+  if [[ "$executable" == "$APP_BIN" ]]; then
+    kill -TERM "$pid"
+    for _ in {1..100}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "App did not stop; activation aborted without replacing it" >&2
+      false
     fi
   fi
-  mkdir -p "$INSTALL_ROOT"
-  rsync -a --delete \
-    --exclude ".git" \
-    --exclude "logs" \
-    --exclude "tts.env" \
-    --exclude "tts-audio" \
-    --exclude "swift-agent/.build" \
-    --exclude "swift-agent/.swiftpm" \
-    --exclude "asr_worker/.venv" \
-    --exclude "supertonic_worker/.venv" \
-    --exclude "vendor/permanent-transcriber/.venv" \
-    --exclude "asr_worker/__pycache__" \
-    --exclude "asr_worker/test-worker.log" \
-    --exclude "batch-output" \
-    "$SOURCE_ROOT/" "$INSTALL_ROOT/"
-  MAC_DICTATION_DATA_ROOT="$DATA_ROOT" \
-    MAC_DICTATION_MODEL_ROOT="$MODEL_ROOT" \
-    MAC_DICTATION_FLUID_MODEL_ROOT="$FLUID_MODEL_ROOT" \
-    MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT="$SUPERTONIC_TTS_MODEL_ROOT" \
-    MAC_DICTATION_TTS_IDLE_SECONDS="$LOCAL_TTS_IDLE_SECONDS" \
-    MAC_DICTATION_LAUNCH_AGENT_LABEL="$LAUNCH_AGENT_LABEL" \
-    MAC_DICTATION_PLIST="$PLIST" \
-    MAC_DICTATION_APP_DIR="$APP_DIR" \
-    MAC_DICTATION_PREBUILT_APP="$PREBUILT_APP" \
-    MAC_DICTATION_ACTIVATE="$ACTIVATE" \
-    MAC_DICTATION_WARM_MODELS="$WARM_MODELS" \
-    MAC_DICTATION_ASR_PORT="$ASR_PORT" \
-    MAC_DICTATION_INSTALL_EXTRAS="$INSTALL_EXTRAS" \
-    MAC_DICTATION_PERMANENT_WAS_STOPPED="$PERMANENT_WAS_STOPPED" \
-    exec /bin/bash "$INSTALL_ROOT/scripts/install_launch_agent.sh" --installed
-fi
-
-ROOT="$SOURCE_ROOT"
-mkdir -p "$DATA_ROOT" "$MODEL_ROOT"
-LOG_DIR="$DATA_ROOT/logs"
-APP_HELPER="$APP_DIR/Contents/Helpers/FluidDictationService"
-SUPERTONIC_TTS_WORKER_BIN="$ROOT/supertonic_worker/.venv/bin/supertonic-tts-worker"
-LEGACY_FLUID_MODEL_ROOT="$HOME/Library/Application Support/FluidAudio/Models"
-
-mkdir -p \
-  "$HOME/Library/LaunchAgents" \
-  "$LOG_DIR" \
-  "$FLUID_MODEL_ROOT" \
-  "$SUPERTONIC_TTS_MODEL_ROOT"
-launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-stop_installed_processes "MacDictationAgent" "$APP_BIN"
-stop_installed_processes "FluidDictationService" "$APP_HELPER"
-stop_installed_process_path "$SUPERTONIC_TTS_WORKER_BIN"
-if [[ "$INSTALL_EXTRAS" == "1" ]]; then
-  (cd "$ROOT/asr_worker" && uv sync --frozen)
-  (cd "$ROOT/supertonic_worker" && uv sync --frozen)
-  (cd "$ROOT/vendor/permanent-transcriber" && uv sync --frozen)
-fi
-if [[ "$INSTALL_EXTRAS" == "1" && "$WARM_MODELS" == "1" ]]; then
-  echo "Downloading the Parakeet speech model if it is not already cached..."
-  (cd "$ROOT/asr_worker" && MAC_DICTATION_MODEL_ROOT="$MODEL_ROOT" \
-    uv run --project "$ROOT/asr_worker" python download_model.py)
-fi
-if [[ -n "$PREBUILT_APP" ]]; then
-  if [[ ! -x "$PREBUILT_APP/Contents/MacOS/MacDictationAgent" ]]; then
-    echo "prebuilt app is invalid: $PREBUILT_APP" >&2
-    exit 1
+done < <(pgrep -x MacDictationAgent || true)
+if [[ -e "$APP_DIR" ]]; then mv "$APP_DIR" "$BACKUP/MacDictationAgent.app"; fi
+mv "$ROOT/MacDictationAgent.app" "$APP_DIR"
+cp "$ROOT/launch.plist" "$PLIST"
+ln -s "$ROOT" "$DATA_ROOT/runtime-next-$$"
+mv -h -f "$DATA_ROOT/runtime-next-$$" "$RUNTIME_LINK"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR"
+launchctl enable "gui/$(id -u)/$LABEL"
+launchctl bootstrap "gui/$(id -u)" "$PLIST"
+STARTED=0
+for _ in {1..100}; do
+  NEW_PID="$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | awk '$1 == "pid" && $2 == "=" {print $3}' || true)"
+  if [[ -n "$NEW_PID" && "$(ps -p "$NEW_PID" -o comm= 2>/dev/null || true)" == "$APP_BIN" ]]; then
+    STARTED=1
+    break
   fi
-  rm -rf "$APP_DIR"
-  mkdir -p "$(dirname "$APP_DIR")"
-  rsync -a "$PREBUILT_APP/" "$APP_DIR/"
-  xattr -cr "$APP_DIR" 2>/dev/null || true
-  codesign --verify --deep --strict "$APP_DIR"
-else
-  MAC_DICTATION_APP_DIR="$APP_DIR" "$ROOT/scripts/build_app_bundle.sh"
-fi
-if [[ ! -d "$FLUID_MODEL_ROOT/parakeet-tdt-0.6b-v3" && -d "$LEGACY_FLUID_MODEL_ROOT/parakeet-tdt-0.6b-v3" ]]; then
-  cp -R "$LEGACY_FLUID_MODEL_ROOT/parakeet-tdt-0.6b-v3" "$FLUID_MODEL_ROOT/"
-fi
-if [[ "$WARM_MODELS" == "1" ]]; then
-  printf '%s\n%s\n' \
-    '{"id":"install-warmup","action":"warmup","final":false}' \
-    '{"id":"install-shutdown","action":"shutdown","final":false}' \
-    | MAC_DICTATION_FLUID_MODEL_ROOT="$FLUID_MODEL_ROOT" "$APP_HELPER" \
-        >/dev/null 2>>"$LOG_DIR/fluid-dictation-service.log"
-fi
-
-cat > "$PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$LAUNCH_AGENT_LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$APP_BIN</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-	  <key>PATH</key>
-	  <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-	  <key>MAC_DICTATION_AGENT_ROOT</key>
-	  <string>$ROOT</string>
-	  <key>MAC_DICTATION_DATA_ROOT</key>
-	  <string>$DATA_ROOT</string>
-	  <key>MAC_DICTATION_MODEL_ROOT</key>
-	  <string>$MODEL_ROOT</string>
-	  <key>MAC_DICTATION_FLUID_MODEL_ROOT</key>
-	  <string>$FLUID_MODEL_ROOT</string>
-	  <key>MAC_DICTATION_FLUID_SERVICE_BIN</key>
-	  <string>$APP_HELPER</string>
-	  <key>MAC_DICTATION_SUPERTONIC_TTS_SERVICE_BIN</key>
-	  <string>$SUPERTONIC_TTS_WORKER_BIN</string>
-	  <key>MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT</key>
-	  <string>$SUPERTONIC_TTS_MODEL_ROOT</string>
-	  <key>MAC_DICTATION_TTS_IDLE_SECONDS</key>
-	  <string>$LOCAL_TTS_IDLE_SECONDS</string>
-	  <key>MAC_DICTATION_ASR_PORT</key>
-	  <string>$ASR_PORT</string>
-	  <key>MAC_DICTATION_LAUNCH_AGENT_LABEL</key>
-	  <string>$LAUNCH_AGENT_LABEL</string>
-	</dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>$LOG_DIR/agent.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>$LOG_DIR/agent.err.log</string>
-</dict>
-</plist>
-PLIST
-
-if [[ "$ACTIVATE" == "1" ]]; then
-  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR" 2>/dev/null || true
-  launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-  launchctl enable "gui/$(id -u)/$LAUNCH_AGENT_LABEL"
-  launchctl bootstrap "gui/$(id -u)" "$PLIST"
-  launchctl kickstart "gui/$(id -u)/$LAUNCH_AGENT_LABEL"
-  launchctl print "gui/$(id -u)/$LAUNCH_AGENT_LABEL" >/dev/null
-  echo "installed and started: $PLIST"
-else
-  echo "installed without starting: $PLIST"
-fi
-echo "app bundle: $APP_DIR"
-echo "dictation service: $APP_HELPER"
-echo "local TTS service: $SUPERTONIC_TTS_WORKER_BIN"
-if [[ "$INSTALL_EXTRAS" != "1" ]]; then
-  echo "optional file transcription, continuous recording, and local TTS tools were not installed"
-fi
-if [[ "${MAC_DICTATION_PERMANENT_WAS_STOPPED:-0}" == "1" ]]; then
-  echo "continuous transcription was stopped for the update; restart it from the menu bar"
-fi
+  sleep 0.1
+done
+[[ "$STARTED" == 1 ]] || { echo "Installed app did not start" >&2; false; }
+trap - ERR
+echo "Installed and started: $APP_DIR"
+echo "Previous installation preserved: $BACKUP"
+echo "Recordings, transcripts, and models remain in: $DATA_ROOT"
+echo "Continuous recording is not restarted automatically."

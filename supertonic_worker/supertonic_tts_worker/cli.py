@@ -376,7 +376,7 @@ def run_http_server(port: int) -> int:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        response = {"id": str(uuid.uuid4())}
+        response = {"id": str(uuid.uuid4()), "service": "supertonic-tts", "model": "supertonic-3"}
         if worker.loaded_language is not None:
             response["loadedLanguage"] = worker.loaded_language
         return response

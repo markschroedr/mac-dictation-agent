@@ -7,7 +7,7 @@ ARCHIVE="${1:-$SOURCE_ROOT/dist/Mac-Dictation-Agent-$VERSION-macOS-arm64.zip}"
 CHECKSUM="$ARCHIVE.sha256"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mac-dictation-verify.XXXXXX")"
 
-trap 'rm -rf "$TEST_ROOT"' EXIT
+trap 'echo "verification workspace: $TEST_ROOT"' EXIT
 
 if [[ ! -f "$ARCHIVE" || ! -f "$CHECKSUM" ]]; then
   echo "release archive or checksum is missing" >&2
@@ -25,6 +25,11 @@ PACKAGE_ROOT="$TEST_ROOT/package/Mac-Dictation-Agent-$VERSION-macOS-arm64"
 DATA_ROOT="$TEST_ROOT/data"
 APP_DIR="$TEST_ROOT/Applications/MacDictationAgent.app"
 PLIST="$TEST_ROOT/com.markschroedr.mac-dictation.release-test.plist"
+STAGE="$TEST_ROOT/prepared-runtime"
+# Existing installation sentinels must survive preparation byte-for-byte.
+mkdir -p "$APP_DIR"
+printf 'existing app\n' > "$APP_DIR/sentinel"
+printf 'existing launch configuration\n' > "$PLIST"
 
 for document in README.md LICENSE THIRD_PARTY_NOTICES.md CHANGELOG.md docs/PRIVACY.md THIRD_PARTY_LICENSES/FluidAudio-Apache-2.0.txt assets/mockups/readme-hero.png assets/screenshots/menu.png; do
   if [[ ! -f "$PACKAGE_ROOT/$document" ]]; then
@@ -34,7 +39,7 @@ for document in README.md LICENSE THIRD_PARTY_NOTICES.md CHANGELOG.md docs/PRIVA
 done
 
 MAC_DICTATION_DATA_ROOT="$DATA_ROOT" \
-MAC_DICTATION_INSTALL_ROOT="$DATA_ROOT/runtime" \
+MAC_DICTATION_INSTALL_ROOT="$STAGE" \
 MAC_DICTATION_MODEL_ROOT="$DATA_ROOT/models" \
 MAC_DICTATION_APP_DIR="$APP_DIR" \
 MAC_DICTATION_PLIST="$PLIST" \
@@ -46,7 +51,13 @@ MAC_DICTATION_WARM_MODELS="0" \
 MAC_DICTATION_INSTALL_EXTRAS="0" \
   /bin/bash "$PACKAGE_ROOT/runtime/scripts/install_launch_agent.sh"
 
-if [[ -d "$DATA_ROOT/runtime/asr_worker/.venv" ]]; then
+[[ "$(<"$APP_DIR/sentinel")" == 'existing app' ]]
+[[ "$(<"$PLIST")" == 'existing launch configuration' ]]
+[[ ! -e "$DATA_ROOT/runtime" ]]
+APP_DIR="$STAGE/MacDictationAgent.app"
+PLIST="$STAGE/launch.plist"
+
+if [[ -d "$STAGE/asr_worker/.venv" ]]; then
   echo "core installation created an optional Python environment" >&2
   exit 1
 fi

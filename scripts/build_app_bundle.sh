@@ -21,7 +21,7 @@ if [[ -z "$VERSION" ]]; then
 fi
 
 STAGING_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mac-dictation-app.XXXXXX")"
-trap 'rm -rf "$STAGING_ROOT"' EXIT
+trap 'echo "build workspace: $STAGING_ROOT"' EXIT
 STAGED_APP="$STAGING_ROOT/MacDictationAgent.app"
 APP_BIN="$STAGED_APP/Contents/MacOS/MacDictationAgent"
 APP_HELPER="$STAGED_APP/Contents/Helpers/FluidDictationService"
@@ -94,7 +94,7 @@ codesign \
   "$STAGED_APP" >/dev/null
 
 mkdir -p "$(dirname "$APP_DIR")"
-rm -rf "$APP_DIR"
+[[ ! -e "$APP_DIR" && ! -L "$APP_DIR" ]] || { echo "Build destination must be new: $APP_DIR" >&2; exit 1; }
 mv "$STAGED_APP" "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR"
 echo "built app bundle: $APP_DIR"

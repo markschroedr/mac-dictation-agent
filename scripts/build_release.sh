@@ -12,7 +12,7 @@ PRODUCT_ROOT="$STAGING_ROOT/$ARCHIVE_NAME"
 RUNTIME_ROOT="$PRODUCT_ROOT/runtime"
 ARCHIVE_PATH="$DIST_ROOT/$ARCHIVE_NAME.zip"
 
-trap 'rm -rf "$STAGING_ROOT"' EXIT
+trap 'echo "release workspace: $STAGING_ROOT"' EXIT
 
 for dependency in rsync ditto shasum; do
   if ! command -v "$dependency" >/dev/null 2>&1; then
@@ -21,7 +21,7 @@ for dependency in rsync ditto shasum; do
   fi
 done
 
-rm -rf "$PRODUCT_ROOT"
+[[ ! -e "$ARCHIVE_PATH" && ! -e "$ARCHIVE_PATH.sha256" ]] || { echo "Release artifacts already exist; preserve them before rebuilding" >&2; exit 1; }
 mkdir -p \
   "$PRODUCT_ROOT" \
   "$RUNTIME_ROOT/asr_worker" \
@@ -152,8 +152,6 @@ chmod +x \
   "$PRODUCT_ROOT/Uninstall Mac Dictation Agent.command"
 
 xattr -cr "$PRODUCT_ROOT" 2>/dev/null || true
-find "$PRODUCT_ROOT" -name '._*' -delete
-rm -f "$ARCHIVE_PATH" "$ARCHIVE_PATH.sha256"
 ditto -c -k --norsrc --keepParent "$PRODUCT_ROOT" "$ARCHIVE_PATH"
 (
   cd "$DIST_ROOT"
