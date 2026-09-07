@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 - 2026-09-07
+
+- Start speech playback with a short first chunk while later chunks generate.
+- Play chunks in text order through VLC without restarting after Stop.
+- Save a joined recording after generation: WAV for local speech, M4A for multi-chunk cloud speech.
+- Add a CLI benchmark for audio readiness and observed VLC playback latency.
+
 ## 0.1.2 - 2026-09-05
 
 - Added configurable Quick Speak Clipboard presets without a default cloud provider.

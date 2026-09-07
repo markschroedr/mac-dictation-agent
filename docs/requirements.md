@@ -18,3 +18,16 @@
 - Explain optional dependency and credential setup.
 - Keep the replacement simple. Use a brief cutover with the previous app available for rollback.
 - Archive redundant repositories and runtime folders after verifying the replacement.
+
+## Progressive speech
+
+- Start every speech request with one natural 15-to-30-word chunk.
+- Use 40-to-70 words for the second chunk.
+- Use larger bounded chunks after the second chunk.
+- Apply progressive chunks to every speech provider.
+- Play ready chunks in text order through visible VLC controls.
+- Do not resume playback after the user stops VLC.
+- Save one joined audio file after all chunks finish.
+- Do not restart playback when the joined file becomes ready.
+- Report monotonic time from generation start to first audio readiness, VLC launch, and observed VLC playback.
+- Keep one speech behavior. Do not add fast and slow modes.

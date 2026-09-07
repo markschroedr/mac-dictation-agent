@@ -424,6 +424,7 @@ struct TTSRunResult {
     let runDir: URL
     let chunkCount: Int
     let characterCount: Int
+    let metrics: TTSRunMetrics
 }
 
 private struct RemoteTTSChunkJob: Sendable {
@@ -907,6 +908,7 @@ extension LocalTTSClient: @unchecked Sendable {}
 final class ClipboardTTSManager {
     private let lock = NSLock()
     private var isRunning = false
+    private var latestPlayback: ProgressiveVLCPlayback?
     private let queue = DispatchQueue(label: "com.markschroedr.mac-dictation.tts", qos: .userInitiated)
     private let supertonic = LocalTTSClient(
         configuration: LocalTTSClientConfiguration(
@@ -998,58 +1000,98 @@ final class ClipboardTTSManager {
         let runDir = ttsAudioDir.appendingPathComponent("\(stamp)-\(provider.rawValue)-\(languageLabel)")
         try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
 
-        let chunks = chunkText(sourceText, maxCharacters: provider.maxChunkCharacters)
-        logEvent("tts start provider=\(provider.rawValue) selected_language=\(language.rawValue) effective_language=\(effectiveLanguage.rawValue) chars=\(sourceText.count) chunks=\(chunks.count)")
+        let metrics = TTSRunMetrics(provider: provider)
+        let chunks = ProgressiveTTSChunker.chunks(
+            text: sourceText,
+            maximumCharacters: provider.maxChunkCharacters
+        )
+        let playback = play
+            ? try ProgressiveVLCPlayback(
+                runDirectory: runDir,
+                provider: provider,
+                metrics: metrics,
+                chunkCount: chunks.count
+            )
+            : nil
+        lock.lock()
+        let previousPlayback = latestPlayback
+        latestPlayback = playback
+        lock.unlock()
+        previousPlayback?.abort()
+        logEvent(
+            "tts start provider=\(provider.rawValue) selected_language=\(language.rawValue) "
+                + "effective_language=\(effectiveLanguage.rawValue) chars=\(sourceText.count) "
+                + "chunks=\(chunks.count) chunk_words=\(chunks.map { $0.split(whereSeparator: \Character.isWhitespace).count })"
+        )
         progress?(0, chunks.count)
 
+        let onChunkReady: @Sendable (Int, URL) throws -> Void = { index, url in
+            if index == 1 {
+                metrics.markFirstAudioReady()
+            }
+            try playback?.accept(index: index, url: url)
+        }
+
         let chunkFiles: [URL]
-        if provider.isLocal {
-            chunkFiles = try synthesizeLocalChunks(
-                chunks,
-                provider: provider,
-                language: effectiveLanguage,
-                voiceID: voiceID,
-                runDir: runDir,
-                progress: progress
-            )
-        } else {
-            guard let apiKey else {
-                throw ClipboardTTSError.invalidResponse(
-                    "\(provider.displayName) API key was not resolved"
+        do {
+            if provider.isLocal {
+                chunkFiles = try synthesizeLocalChunks(
+                    chunks,
+                    provider: provider,
+                    language: effectiveLanguage,
+                    voiceID: voiceID,
+                    runDir: runDir,
+                    progress: progress,
+                    onChunkReady: onChunkReady
+                )
+            } else {
+                guard let apiKey else {
+                    throw ClipboardTTSError.invalidResponse(
+                        "\(provider.displayName) API key was not resolved"
+                    )
+                }
+                chunkFiles = try synthesizeRemoteChunks(
+                    chunks,
+                    provider: provider,
+                    language: effectiveLanguage,
+                    voiceID: voiceID,
+                    apiKey: apiKey,
+                    runDir: runDir,
+                    progress: progress,
+                    onChunkReady: onChunkReady
                 )
             }
-            chunkFiles = try synthesizeRemoteChunks(
-                chunks,
+        } catch {
+            playback?.abort(error: "TTS generation failed: \(error)")
+            throw error
+        }
+
+        let openURL = runDir.appendingPathComponent(
+            "audio.\(chunks.count > 1 && !provider.isLocal ? "m4a" : provider.audioExtension)"
+        )
+        do {
+            try JoinedTTSWriter.write(
+                chunks: chunkFiles,
                 provider: provider,
-                language: effectiveLanguage,
-                voiceID: voiceID,
-                apiKey: apiKey,
-                runDir: runDir,
-                progress: progress
+                to: openURL
             )
+        } catch {
+            playback?.abort(error: "Could not join TTS audio: \(error)")
+            throw error
         }
+        playback?.finish(expectedChunkCount: chunkFiles.count)
+        metrics.markGenerationCompleted()
+        lock.lock()
+        latestPlayback = playback
+        lock.unlock()
 
-        let openURL: URL
-        if chunkFiles.count == 1, let single = chunkFiles.first {
-            let finalURL = runDir.appendingPathComponent(
-                "audio.\(provider.audioExtension)"
-            )
-            if finalURL != single {
-                try? FileManager.default.removeItem(at: finalURL)
-                try FileManager.default.copyItem(at: single, to: finalURL)
-            }
-            openURL = finalURL
-        } else {
-            openURL = runDir.appendingPathComponent("playlist.m3u")
-            let playlist = chunkFiles.map { $0.path }.joined(separator: "\n") + "\n"
-            try playlist.write(to: openURL, atomically: true, encoding: .utf8)
-        }
-
-        if play {
-            openForPlayback(openURL)
-        }
-
-        return TTSRunResult(openURL: openURL, runDir: runDir, chunkCount: chunks.count, characterCount: sourceText.count)
+        return TTSRunResult(
+            openURL: openURL,
+            runDir: runDir,
+            chunkCount: chunks.count,
+            characterCount: sourceText.count,
+            metrics: metrics
+        )
     }
 
     private func synthesizeLocalChunks(
@@ -1058,7 +1100,8 @@ final class ClipboardTTSManager {
         language: TTSLanguage,
         voiceID: String?,
         runDir: URL,
-        progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?
+        progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?,
+        onChunkReady: @Sendable (_ index: Int, _ url: URL) throws -> Void
     ) throws -> [URL] {
         var chunkFiles: [URL] = []
         for (offset, chunk) in chunks.enumerated() {
@@ -1075,6 +1118,7 @@ final class ClipboardTTSManager {
                 outputURL: chunkURL
             )
             chunkFiles.append(chunkURL)
+            try onChunkReady(index, chunkURL)
             logChunkCompletion(
                 provider: provider,
                 index: index,
@@ -1093,7 +1137,8 @@ final class ClipboardTTSManager {
         voiceID: String?,
         apiKey: String,
         runDir: URL,
-        progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?
+        progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)?,
+        onChunkReady: @escaping @Sendable (_ index: Int, _ url: URL) throws -> Void
     ) throws -> [URL] {
         let jobs = chunks.enumerated().map { offset, text in
             let index = offset + 1
@@ -1125,6 +1170,7 @@ final class ClipboardTTSManager {
                             apiKey: apiKey
                         )
                         try audioData.write(to: job.outputURL, options: .atomic)
+                        try onChunkReady(job.index, job.outputURL)
                         let completed = state.recordSuccess(
                             index: job.index,
                             byteCount: audioData.count
@@ -1170,7 +1216,18 @@ final class ClipboardTTSManager {
         )
     }
 
+    func waitForPlayback() -> String? {
+        lock.lock()
+        let playback = latestPlayback
+        lock.unlock()
+        return playback?.waitUntilFinished()
+    }
+
     func shutdown() {
+        lock.lock()
+        let playback = latestPlayback
+        lock.unlock()
+        playback?.abort(error: "TTS manager shut down")
         supertonic.shutdown()
     }
 
@@ -1186,120 +1243,6 @@ final class ClipboardTTSManager {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func chunkText(_ text: String, maxCharacters: Int) -> [String] {
-        let paragraphs = text.components(separatedBy: "\n\n")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        var chunks: [String] = []
-        var current = ""
-
-        for paragraph in paragraphs {
-            for piece in splitParagraph(paragraph, maxCharacters: maxCharacters) {
-                if current.isEmpty {
-                    current = piece
-                    continue
-                }
-                let proposed = "\(current)\n\n\(piece)"
-                if proposed.count > maxCharacters {
-                    chunks.append(current)
-                    current = piece
-                } else {
-                    current = proposed
-                }
-            }
-        }
-
-        if !current.isEmpty {
-            chunks.append(current)
-        }
-        return chunks.isEmpty ? [text] : chunks
-    }
-
-    private func splitParagraph(_ paragraph: String, maxCharacters: Int) -> [String] {
-        if paragraph.count <= maxCharacters {
-            return [paragraph]
-        }
-
-        let sentenceRegex = try? NSRegularExpression(pattern: #"(?<=[.!?;:])\s+"#)
-        let nsRange = NSRange(paragraph.startIndex..<paragraph.endIndex, in: paragraph)
-        let ranges = sentenceRegex?.matches(in: paragraph, range: nsRange).map(\.range) ?? []
-        var sentences: [String] = []
-        var start = paragraph.startIndex
-        for range in ranges {
-            guard let separatorRange = Range(range, in: paragraph) else {
-                continue
-            }
-            let sentence = paragraph[start..<separatorRange.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            if !sentence.isEmpty {
-                sentences.append(sentence)
-            }
-            start = separatorRange.upperBound
-        }
-        let tail = paragraph[start...].trimmingCharacters(in: .whitespacesAndNewlines)
-        if !tail.isEmpty {
-            sentences.append(tail)
-        }
-        if sentences.isEmpty {
-            sentences = [paragraph]
-        }
-
-        var chunks: [String] = []
-        var current = ""
-        for sentence in sentences {
-            if sentence.count > maxCharacters {
-                if !current.isEmpty {
-                    chunks.append(current)
-                    current = ""
-                }
-                chunks.append(contentsOf: splitLongText(sentence, maxCharacters: maxCharacters))
-                continue
-            }
-            let proposed = current.isEmpty ? sentence : "\(current) \(sentence)"
-            if proposed.count > maxCharacters {
-                chunks.append(current)
-                current = sentence
-            } else {
-                current = proposed
-            }
-        }
-        if !current.isEmpty {
-            chunks.append(current)
-        }
-        return chunks
-    }
-
-    private func splitLongText(_ text: String, maxCharacters: Int) -> [String] {
-        let words = text.split(separator: " ").map(String.init)
-        var chunks: [String] = []
-        var current = ""
-        for word in words {
-            if word.count > maxCharacters {
-                if !current.isEmpty {
-                    chunks.append(current)
-                    current = ""
-                }
-                var remainder = word
-                while !remainder.isEmpty {
-                    let end = remainder.index(remainder.startIndex, offsetBy: min(maxCharacters, remainder.count))
-                    chunks.append(String(remainder[..<end]))
-                    remainder = String(remainder[end...])
-                }
-                continue
-            }
-            let proposed = current.isEmpty ? word : "\(current) \(word)"
-            if proposed.count > maxCharacters {
-                chunks.append(current)
-                current = word
-            } else {
-                current = proposed
-            }
-        }
-        if !current.isEmpty {
-            chunks.append(current)
-        }
-        return chunks
     }
 
     private func synthesizeRemote(
@@ -1447,27 +1390,6 @@ final class ClipboardTTSManager {
             return (nil, nil, ClipboardTTSError.requestFailed("TTS request timed out"))
         }
         return result.snapshot()
-    }
-
-    private func openForPlayback(_ url: URL) {
-        let workspace = NSWorkspace.shared
-        let candidates = [
-            URL(fileURLWithPath: "/Applications/VLC.app"),
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/VLC.app"),
-        ]
-        if let vlc = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
-            let configuration = NSWorkspace.OpenConfiguration()
-            workspace.open([url], withApplicationAt: vlc, configuration: configuration) { _, error in
-                if let error {
-                    logEvent("tts VLC open failed error=\(error)")
-                    DispatchQueue.main.async {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-            }
-        } else {
-            workspace.open(url)
-        }
     }
 
     private static func timestamp() -> String {
@@ -4053,7 +3975,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                 options: [.skipsHiddenFiles]
             )) ?? []
             let supportedAudio = audioFiles.filter {
-                ["wav", "mp3"].contains($0.pathExtension.lowercased())
+                ["wav", "mp3", "m4a"].contains($0.pathExtension.lowercased())
             }
             let audio = supportedAudio.first { $0.deletingPathExtension().lastPathComponent == "audio" }
                 ?? supportedAudio.sorted { $0.lastPathComponent < $1.lastPathComponent }.first
@@ -4432,6 +4354,10 @@ final class DictationAgent {
             runHotkeyLockTest()
             return
         }
+        if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--tts-benchmark" {
+            runTTSBenchmark(arguments: Array(CommandLine.arguments.dropFirst(2)))
+            return
+        }
         if CommandLine.arguments.count >= 4, CommandLine.arguments[1] == "--tts-test" {
             let languageOrTextStart = CommandLine.arguments[3].lowercased()
             let language = TTSLanguage(rawValue: languageOrTextStart)
@@ -4739,15 +4665,7 @@ final class DictationAgent {
     }
 
     private func runTTSTest(providerName: String, language: TTSLanguage, text: String) {
-        let normalizedProvider = providerName.lowercased()
-        let provider: TTSProvider
-        if normalizedProvider == "supertonic" || normalizedProvider == "local" {
-            provider = .supertonic
-        } else if normalizedProvider == "inworld" {
-            provider = .inworld
-        } else if normalizedProvider == "xai" || normalizedProvider == "grok" {
-            provider = .xai
-        } else {
+        guard let provider = ttsProvider(named: providerName) else {
             fputs(
                 "tts-test failed: provider must be local, supertonic, inworld, or xai\n",
                 stderr
@@ -4759,11 +4677,124 @@ final class DictationAgent {
             tts.shutdown()
         }
         do {
-            let result = try tts.generateSpeech(text: text, provider: provider, language: language, play: false)
+            let result = try tts.generateSpeech(
+                text: text,
+                provider: provider,
+                language: language,
+                play: false
+            )
             print(result.openURL.path)
         } catch {
             fputs("tts-test failed: \(error)\n", stderr)
             exit(1)
+        }
+    }
+
+    private func runTTSBenchmark(arguments: [String]) {
+        guard let providerName = arguments.first,
+              let provider = ttsProvider(named: providerName) else {
+            fputs(
+                "usage: --tts-benchmark <provider> [auto|english|german] [--play] --file <path>\n",
+                stderr
+            )
+            exit(1)
+        }
+
+        var language = TTSLanguage.current()
+        var play = false
+        var filePath: String?
+        var textParts: [String] = []
+        var index = 1
+        if arguments.indices.contains(index),
+           let positionalLanguage = TTSLanguage(rawValue: arguments[index].lowercased()) {
+            language = positionalLanguage
+            index += 1
+        }
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--play":
+                play = true
+                index += 1
+            case "--file":
+                guard arguments.indices.contains(index + 1) else {
+                    fputs("tts-benchmark failed: --file requires a path\n", stderr)
+                    exit(1)
+                }
+                filePath = arguments[index + 1]
+                index += 2
+            default:
+                textParts.append(arguments[index])
+                index += 1
+            }
+        }
+
+        let text: String
+        do {
+            if let filePath {
+                guard textParts.isEmpty else {
+                    throw ClipboardTTSError.invalidResponse(
+                        "Use either --file or inline benchmark text, not both"
+                    )
+                }
+                text = try String(
+                    contentsOf: URL(fileURLWithPath: filePath),
+                    encoding: .utf8
+                )
+            } else {
+                text = textParts.joined(separator: " ")
+            }
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw ClipboardTTSError.emptyClipboard
+            }
+        } catch {
+            fputs("tts-benchmark failed: \(error)\n", stderr)
+            exit(1)
+        }
+
+        defer {
+            tts.shutdown()
+        }
+        do {
+            let result = try tts.generateSpeech(
+                text: text,
+                provider: provider,
+                language: language,
+                play: play
+            )
+            if play {
+                result.metrics.waitForPlayingObservation(timeout: 5)
+            }
+            let output = TTSBenchmarkOutput(
+                provider: provider.rawValue,
+                language: language.rawValue,
+                play: play,
+                characterCount: result.characterCount,
+                wordCount: text.split(whereSeparator: \Character.isWhitespace).count,
+                chunkCount: result.chunkCount,
+                outputPath: result.openURL.path,
+                metrics: result.metrics.snapshot()
+            )
+            let data = try JSONEncoder().encode(output)
+            print(String(decoding: data, as: UTF8.self))
+            if play, let playbackResult = tts.waitForPlayback() {
+                logEvent("tts benchmark playback ended detail=\(playbackResult)")
+            }
+        } catch {
+            fputs("tts-benchmark failed: \(error)\n", stderr)
+            exit(1)
+        }
+    }
+
+    private func ttsProvider(named name: String) -> TTSProvider? {
+        switch name.lowercased() {
+        case "supertonic", "local":
+            return .supertonic
+        case "inworld":
+            return .inworld
+        case "xai", "grok":
+            return .xai
+        default:
+            return nil
         }
     }
 
