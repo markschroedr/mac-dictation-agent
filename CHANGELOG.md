@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Recognize file transcriptions in 60-second windows with 15-second overlap. One 300-second batch previously peaked at 8.7 GB of MLX memory and crashed the shared ASR service on a 16 GB Mac.
+
 ## 0.1.3 - 2026-09-07
 
 - Start speech playback with a short first chunk while later chunks generate.

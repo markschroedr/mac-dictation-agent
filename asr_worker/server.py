@@ -31,6 +31,12 @@ app = FastAPI()
 
 MODEL_PRECISION = "bf16"
 CONTEXT_SECONDS = 1.0
+# Recognize long audio in bounded windows. Conformer attention memory grows with the
+# square of the window, so one 300-second batch peaked at 8.7 GB of MLX memory and
+# crashed the service on a 16 GB Mac. parakeet-mlx merges the overlapping windows
+# and keeps absolute token timestamps.
+RECOGNITION_CHUNK_SECONDS = 60.0
+RECOGNITION_OVERLAP_SECONDS = 15.0
 IDLE_EXIT_SECONDS = int(os.environ.get("MAC_DICTATION_ASR_IDLE_SECONDS", "60"))
 WARMUP_AUDIO_SECONDS = 1.2
 
@@ -201,9 +207,17 @@ def transcribe_path_service(payload: TranscribePathRequest) -> dict[str, object]
                 log_event(f"transcribe cached after wait session={payload.session_id} chunk={payload.chunk_index}")
                 return cached
             model = load_model()
-            log_event(f"recognize begin session={payload.session_id} chunk={payload.chunk_index} audio={recognition_seconds:.3f}s")
+            log_event(
+                f"recognize begin session={payload.session_id} chunk={payload.chunk_index} "
+                f"audio={recognition_seconds:.3f}s window={RECOGNITION_CHUNK_SECONDS:.0f}s"
+            )
             recognize_started = time.perf_counter()
-            result = model.transcribe(str(recognition_path), dtype=mx.bfloat16)
+            result = model.transcribe(
+                str(recognition_path),
+                dtype=mx.bfloat16,
+                chunk_duration=RECOGNITION_CHUNK_SECONDS,
+                overlap_duration=RECOGNITION_OVERLAP_SECONDS,
+            )
             recognize_seconds = time.perf_counter() - recognize_started
             log_event(f"recognize end session={payload.session_id} chunk={payload.chunk_index} recognize={recognize_seconds:.3f}s")
             clear_metal_cache("transcribe")
