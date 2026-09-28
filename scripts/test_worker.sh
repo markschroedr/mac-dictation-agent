@@ -79,19 +79,6 @@ assert row["text"].strip(), row
 print(json.dumps({"file_api_inputs": len(row["input_paths"]), "file_api_text": row["text"]}, ensure_ascii=False))
 '
 
-curl -fsS -X POST "http://127.0.0.1:$PORT/v1/audio/transcriptions" \
-  -F "file=@$TEST_WAV" \
-  -F "model=local-parakeet-v3" \
-  -F "response_format=json" \
-  | uv run python -c '
-import json
-import sys
-
-row = json.load(sys.stdin)
-assert row["text"].strip(), row
-print(json.dumps({"openai_compatible_text": row["text"]}, ensure_ascii=False))
-'
-
 curl -fsS -X POST "http://127.0.0.1:$PORT/shutdown" >/dev/null
 status="$(curl -sS -o "$TMP_DIR/draining.json" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/warmup")"
 if [[ "$status" != "503" ]]; then

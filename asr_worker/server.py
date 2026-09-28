@@ -15,8 +15,7 @@ from threading import Lock
 from typing import Any
 
 import mlx.core as mx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi import FastAPI, HTTPException
 from parakeet_mlx import from_pretrained
 from pydantic import BaseModel
 
@@ -314,61 +313,6 @@ def transcribe_file(payload: TranscribeFileRequest) -> dict[str, object]:
                 shutil.rmtree(temp_dir, ignore_errors=True)
     finally:
         request_finished()
-
-
-@app.post("/v1/audio/transcriptions")
-def openai_transcriptions(
-    file: UploadFile = File(...),
-    model: str = Form("whisper-large-v3"),
-    response_format: str = Form("json"),
-) -> Response:
-    """OpenAI/Groq-compatible transcription endpoint.
-
-    Accepts the same multipart request as api.groq.com/openai/v1/audio/transcriptions
-    so clients only need to swap the base URL. The model field is accepted and
-    ignored; transcription always uses the local Parakeet model.
-    """
-    if response_format not in {"json", "text", "verbose_json"}:
-        return JSONResponse(
-            status_code=400,
-            content={"error": {"message": f"unsupported response_format: {response_format}", "type": "invalid_request_error"}},
-        )
-    session_id = f"openai-{uuid.uuid4().hex}"
-    suffix = Path(file.filename or "").suffix or ".bin"
-    temp_dir = Path(tempfile.mkdtemp(prefix="mac-dictation-openai-"))
-    try:
-        upload_path = temp_dir / f"upload{suffix}"
-        with upload_path.open("wb") as handle:
-            shutil.copyfileobj(file.file, handle)
-        log_event(f"openai transcribe begin session={session_id} bytes={upload_path.stat().st_size} name={file.filename}")
-        response = transcribe_path(
-            TranscribePathRequest(session_id=session_id, chunk_index=1, path=str(upload_path), final=True)
-        )
-        if error := response.get("error"):
-            return JSONResponse(
-                status_code=400,
-                content={"error": {"message": str(error), "type": "invalid_request_error"}},
-            )
-        text = str(response.get("text", ""))
-        if response_format == "text":
-            return PlainTextResponse(text)
-        if response_format == "verbose_json":
-            segments = [
-                {"id": index, "start": segment["start"], "end": segment["end"], "text": segment["text"]}
-                for index, segment in enumerate(response.get("segments", []))
-            ]
-            return JSONResponse(
-                {
-                    "task": "transcribe",
-                    "duration": response.get("duration_seconds"),
-                    "text": text,
-                    "segments": segments,
-                }
-            )
-        return JSONResponse({"text": text})
-    finally:
-        reset_session(ResetRequest(session_id=session_id))
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def load_model() -> Any:

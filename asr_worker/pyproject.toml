@@ -7,6 +7,5 @@ dependencies = [
     "huggingface-hub>=1.8.0",
     "parakeet-mlx>=0.5.2",
     "pydantic>=2.13.4",
-    "python-multipart>=0.0.20",
     "uvicorn>=0.46.0",
 ]
