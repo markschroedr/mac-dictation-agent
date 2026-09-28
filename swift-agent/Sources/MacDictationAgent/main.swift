@@ -4284,6 +4284,7 @@ private struct DictationHotkeyStateMachine {
 final class DictationAgent {
     private let recorder = AudioRecorder()
     private let dictationASR = FluidDictationClient()
+    private lazy var transcriptionAPI = TranscriptionAPIServer(asr: dictationASR)
     private let mlxASR = MLXASRClient()
     private let tts = ClipboardTTSManager()
     private let stateLock = NSLock()
@@ -4376,6 +4377,7 @@ final class DictationAgent {
         app.finishLaunching()
         statusMenu = StatusMenuController(asr: mlxASR, tts: tts)
         logEvent("Status menu installed.")
+        transcriptionAPI.start()
         configureAccessibilityFeatures()
         DispatchQueue.global(qos: .utility).async {
             self.recorder.preflight()

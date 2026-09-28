@@ -10,6 +10,17 @@ At stop, the app captures another 450 ms to preserve the last word. The helper a
 
 The last partial chunk is normally under 20 seconds, plus post-roll. This is not a hard latency limit: timer delays, model loading, or a processing backlog can increase the wait.
 
+## Local transcription API
+
+While the app runs, it serves an OpenAI-compatible endpoint on loopback. The endpoint uses the same Core ML Parakeet model as hotkey dictation:
+
+```bash
+curl -F file=@recording.m4a http://127.0.0.1:8767/v1/audio/transcriptions
+# {"text":"...","duration":3.3}
+```
+
+The app accepts formats that CoreAudio reads, such as WAV, AIFF, M4A/MP4 (AAC), MP3, and CAF. It does not accept WebM or Ogg. Uploads are limited to 25 MB. Requests queue behind dictation chunks. `GET /health` reports readiness. Set `MAC_DICTATION_API_PORT` to change the port.
+
 ## Optional tools
 
 The release includes tools for audio/video files, batch transcription, continuous recording, speaker labels, and clipboard text-to-speech.
