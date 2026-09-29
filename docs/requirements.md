@@ -23,9 +23,10 @@
 
 - Start every speech request with one natural 15-to-30-word chunk.
 - Use 40-to-70 words for the second chunk.
-- Use larger bounded chunks after the second chunk.
+- Grow later chunks progressively to reduce audible boundaries while preserving quick startup.
 - Apply progressive chunks to every speech provider.
-- Play ready chunks in text order through visible VLC controls.
+- Decode ready chunks to one PCM format and stream them in text order through one continuous HTTP audio response.
+- Keep visible VLC playback controls. Do not switch player items at generation boundaries.
 - Do not resume playback after the user stops VLC.
 - Save one joined audio file after all chunks finish.
 - Do not restart playback when the joined file becomes ready.

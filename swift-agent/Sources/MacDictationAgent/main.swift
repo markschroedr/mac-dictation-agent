@@ -1007,8 +1007,6 @@ final class ClipboardTTSManager {
         )
         let playback = play
             ? try ProgressiveVLCPlayback(
-                runDirectory: runDir,
-                provider: provider,
                 metrics: metrics,
                 chunkCount: chunks.count
             )

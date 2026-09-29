@@ -83,26 +83,32 @@ struct ProgressiveTTSChunker {
         var result: [String] = []
         var index = 0
         while index < units.count {
-            let minimum = result.isEmpty ? 15 : result.count == 1 ? 40 : 80
-            let maximum = result.isEmpty ? 30 : result.count == 1 ? 70 : 140
+            let bounds: (minimum: Int, maximum: Int) = switch result.count {
+            case 0: (15, 30)
+            case 1: (40, 70)
+            case 2: (100, 160)
+            case 3: (180, 280)
+            case 4: (280, 420)
+            default: (400, 600)
+            }
             var current = ""
             var count = 0
             while index < units.count {
                 let unit = units[index]
                 let words = unit.split(whereSeparator: \.isWhitespace)
                 let candidate = current.isEmpty ? unit : current + " " + unit
-                if count + words.count <= maximum && candidate.count <= maximumCharacters {
+                if count + words.count <= bounds.maximum && candidate.count <= maximumCharacters {
                     current = candidate
                     count += words.count
                     index += 1
-                    if count >= minimum { break }
+                    if count >= bounds.minimum { break }
                 } else if !current.isEmpty {
                     // Prefer a short complete sentence over cutting the next sentence merely to fill a quota.
                     break
                 } else {
                     var end = unit.startIndex
                     var accepted = 0
-                    for word in words.prefix(maximum) {
+                    for word in words.prefix(bounds.maximum) {
                         if unit.distance(from: unit.startIndex, to: word.endIndex) > maximumCharacters { break }
                         end = word.endIndex
                         accepted += 1
@@ -177,31 +183,83 @@ enum JoinedTTSWriter {
     }
 }
 
-/// VLC receives a complete ordered playlist once. Each loopback URL waits for its audio file.
-/// Chunk completion only answers HTTP requests; it never sends another player command.
+enum TTSStreamPCM {
+    // Mono 48 kHz signed 16-bit PCM. Unknown lengths allow playback before generation ends.
+    static let waveHeader = Data([
+        0x52, 0x49, 0x46, 0x46, 0xff, 0xff, 0xff, 0xff, // RIFF
+        0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, // WAVEfmt
+        16, 0, 0, 0, 1, 0, 1, 0,
+        0x80, 0xbb, 0, 0, 0, 0x77, 1, 0, 2, 0, 16, 0,
+        0x64, 0x61, 0x74, 0x61, 0xff, 0xff, 0xff, 0xff, // data
+    ])
+
+    static func decode(_ source: URL, to destination: URL) throws {
+        let asset = AVURLAsset(url: source)
+        guard let track = asset.tracks(withMediaType: .audio).first else {
+            throw ClipboardTTSError.invalidResponse("TTS chunk contains no audio track")
+        }
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 48_000,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ])
+        reader.add(output)
+        guard reader.startReading() else {
+            throw reader.error ?? ClipboardTTSError.invalidResponse("Could not decode TTS chunk")
+        }
+        defer { reader.cancelReading() }
+        guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        let file = try FileHandle(forWritingTo: destination)
+        defer { try? file.close() }
+        while let sample = output.copyNextSampleBuffer() {
+            guard let buffer = CMSampleBufferGetDataBuffer(sample) else {
+                throw ClipboardTTSError.invalidResponse("TTS decoder returned no PCM samples")
+            }
+            var data = Data(count: CMBlockBufferGetDataLength(buffer))
+            let status = data.withUnsafeMutableBytes { bytes in
+                CMBlockBufferCopyDataBytes(buffer, atOffset: 0, dataLength: bytes.count, destination: bytes.baseAddress!)
+            }
+            guard status == kCMBlockBufferNoErr else {
+                throw ClipboardTTSError.invalidResponse("Could not copy TTS PCM samples")
+            }
+            try file.write(contentsOf: data)
+        }
+        guard reader.status == .completed else {
+            throw reader.error ?? ClipboardTTSError.invalidResponse("Incomplete TTS PCM decoding")
+        }
+    }
+}
+
+/// One open-ended WAV response keeps VLC's decoder and audio output open across chunks.
+/// Readiness only extends the response; it never sends another player command.
 final class ProgressiveVLCPlayback: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.markschroedr.mac-dictation.tts-http")
     private let condition = NSCondition()
     private let listener: NWListener
     private let metrics: TTSRunMetrics
-    private let playlistURL: URL
     private let token = UUID().uuidString
+    private let pcmDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("mac-dictation-tts-\(UUID().uuidString)", isDirectory: true)
     private let chunkCount: Int
-    private let audioExtension: String
     private var port: UInt16?
     private var ready: [Int: URL] = [:]
     private var connections: [ObjectIdentifier: NWConnection] = [:]
-    private var waiting: [ObjectIdentifier: (NWConnection, Int, Bool)] = [:]
+    private var waiting: [ObjectIdentifier: (NWConnection, Int)] = [:]
     private var launched = false
     private var ended = false
     private var failure: String?
     private var lastDelivered = false
 
-    init(runDirectory: URL, provider: TTSProvider, metrics: TTSRunMetrics, chunkCount: Int) throws {
+    init(metrics: TTSRunMetrics, chunkCount: Int) throws {
         self.metrics = metrics
         self.chunkCount = chunkCount
-        audioExtension = provider.audioExtension
-        playlistURL = runDirectory.appendingPathComponent("live.m3u")
         guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: "org.videolan.vlc") != nil else {
             throw ClipboardTTSError.requestFailed("VLC is required for progressive playback")
         }
@@ -237,34 +295,41 @@ final class ProgressiveVLCPlayback: @unchecked Sendable {
         let boundPort = port
         let error = failure
         condition.unlock()
-        guard let boundPort else {
+        guard boundPort != nil else {
             listener.cancel()
             throw ClipboardTTSError.requestFailed(error ?? "Could not start local TTS playback server")
         }
-        let playlist = "#EXTM3U\n" + (1...chunkCount).map {
-            "http://127.0.0.1:\(boundPort)/\(token)/\($0).\(audioExtension)"
-        }.joined(separator: "\n") + "\n"
-        try playlist.write(to: playlistURL, atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: pcmDirectory, withIntermediateDirectories: true)
     }
 
     func accept(index: Int, url: URL) throws {
+        let pcmURL = pcmDirectory.appendingPathComponent("\(index).pcm")
+        try TTSStreamPCM.decode(url, to: pcmURL)
         let shouldLaunch = queue.sync {
-            ready[index] = url
+            condition.lock()
+            let stopped = ended
+            condition.unlock()
+            guard !stopped else { return false }
+            ready[index] = pcmURL
             for (id, entry) in waiting where entry.1 == index {
                 waiting.removeValue(forKey: id)
-                respond(entry.0, index: index, head: entry.2)
+                sendChunk(entry.0, index: index)
             }
             if index == 1 && !launched { launched = true; return true }
             return false
         }
         guard shouldLaunch else { return }
-        let result = runProcessCapturingOutput("/usr/bin/open", ["-b", "org.videolan.vlc", playlistURL.path])
+        let result = runProcessCapturingOutput("/usr/bin/open", ["-b", "org.videolan.vlc", playbackURL.absoluteString])
         guard result.status == 0 else {
             abort(error: "Could not open VLC: \(result.output)")
             throw ClipboardTTSError.requestFailed("Could not open VLC: \(result.output)")
         }
         metrics.markPlayerLaunch()
         DispatchQueue.global(qos: .utility).async { self.observePlayback() }
+    }
+
+    var playbackURL: URL {
+        URL(string: "http://127.0.0.1:\(port!)/\(token)/audio.wav")!
     }
 
     func finish(expectedChunkCount: Int) {
@@ -306,7 +371,10 @@ final class ProgressiveVLCPlayback: @unchecked Sendable {
         }
     }
 
-    deinit { listener.cancel() }
+    deinit {
+        listener.cancel()
+        try? FileManager.default.removeItem(at: pcmDirectory)
+    }
 
     private func forget(_ connection: NWConnection) {
         connection.stateUpdateHandler = nil
@@ -327,43 +395,55 @@ final class ProgressiveVLCPlayback: @unchecked Sendable {
             }
             let fields = header.components(separatedBy: "\r\n")[0].split(separator: " ")
             guard fields.count == 3, fields[0] == "GET" || fields[0] == "HEAD",
-                  let index = (1...self.chunkCount).first(where: {
-                      fields[1] == "/\(self.token)/\($0).\(self.audioExtension)"
-                  }) else {
-                self.send(connection, status: "404 Not Found", data: Data(), head: false)
+                  fields[1] == "/\(self.token)/audio.wav" else {
+                self.endResponse(connection, data: Data("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8))
                 return
             }
-            let head = fields[0] == "HEAD"
-            if self.ready[index] != nil { self.respond(connection, index: index, head: head) }
-            else { self.waiting[ObjectIdentifier(connection)] = (connection, index, head) }
+            var response = Data("HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nAccept-Ranges: none\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n".utf8)
+            if fields[0] == "HEAD" {
+                self.endResponse(connection, data: response)
+                return
+            }
+            response.append(TTSStreamPCM.waveHeader)
+            connection.send(content: response, completion: .contentProcessed { [weak self] error in
+                guard let self else { connection.cancel(); return }
+                if error != nil { connection.cancel(); self.forget(connection); return }
+                self.sendChunk(connection, index: 1)
+            })
         }
     }
 
-    private func respond(_ connection: NWConnection, index: Int, head: Bool) {
+    private func sendChunk(_ connection: NWConnection, index: Int) {
+        guard connections[ObjectIdentifier(connection)] != nil else { return }
+        guard index <= chunkCount else {
+            endResponse(connection, data: nil, completed: true)
+            return
+        }
+        guard let url = ready[index] else {
+            waiting[ObjectIdentifier(connection)] = (connection, index)
+            return
+        }
         do {
-            guard let url = ready[index] else { return }
-            let data = try Data(contentsOf: url)
-            send(connection, status: "200 OK", data: data, head: head, index: index)
+            let data = try Data(contentsOf: url, options: .mappedIfSafe)
+            connection.send(content: data, completion: .contentProcessed { [weak self] error in
+                guard let self else { connection.cancel(); return }
+                if error != nil { connection.cancel(); self.forget(connection); return }
+                logEvent("tts playback player=vlc event=chunk_delivered index=\(index)")
+                self.sendChunk(connection, index: index + 1)
+            })
         } catch {
-            logEvent("tts playback read failed index=\(index) error=\(error)")
-            send(connection, status: "500 Internal Server Error", data: Data(), head: head)
+            abort(error: "Could not read TTS stream chunk: \(error)")
         }
     }
 
-    private func send(_ connection: NWConnection, status: String, data: Data, head: Bool, index: Int? = nil) {
-        let mime = audioExtension == "mp3" ? "audio/mpeg" : "audio/wav"
-        var response = Data("HTTP/1.1 \(status)\r\nContent-Type: \(mime)\r\nContent-Length: \(data.count)\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n".utf8)
-        if !head { response.append(data) }
-        connection.send(content: response, completion: .contentProcessed { [weak self] error in
+    private func endResponse(_ connection: NWConnection, data: Data?, completed: Bool = false) {
+        connection.send(content: data, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] error in
             guard let self else { connection.cancel(); return }
-            if error == nil, !head, let index {
-                logEvent("tts playback player=vlc event=chunk_delivered index=\(index)")
-                if index == self.chunkCount {
-                    self.condition.lock()
-                    self.lastDelivered = true
-                    self.condition.broadcast()
-                    self.condition.unlock()
-                }
+            if error == nil && completed {
+                self.condition.lock()
+                self.lastDelivered = true
+                self.condition.broadcast()
+                self.condition.unlock()
             }
             connection.cancel()
             self.forget(connection)
