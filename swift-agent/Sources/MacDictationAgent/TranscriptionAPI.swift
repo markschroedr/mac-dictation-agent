@@ -53,31 +53,35 @@ final class TranscriptionAPIServer: @unchecked Sendable {
             case .incomplete:
                 if complete { connection.cancel() } else { self.receive(connection, buffer: buffer) }
             case .invalid(let status, let message):
-                self.respond(connection, status: status, body: errorBody(message))
+                self.respond(connection, .error(status, message))
             case .complete(let request):
                 DispatchQueue.global(qos: .userInitiated).async {
-                    let (status, body) = self.handle(request)
-                    self.respond(connection, status: status, body: body)
+                    self.respond(connection, self.handle(request))
                 }
             }
         }
     }
 
-    private func handle(_ request: HTTPRequest) -> (Int, Data) {
+    private func handle(_ request: HTTPRequest) -> HTTPResponse {
         switch (request.method, request.path) {
         case ("GET", "/health"):
-            return (200, encode(HealthBody()))
+            return .json(HealthBody())
         case ("POST", "/v1/audio/transcriptions"):
             return transcribe(request)
         default:
-            return (404, errorBody("not found"))
+            return .error(404, "not found")
         }
     }
 
-    private func transcribe(_ request: HTTPRequest) -> (Int, Data) {
-        guard let upload = multipartFile(request.body, contentType: request.headers["content-type"]),
-              !upload.data.isEmpty else {
-            return (400, errorBody("multipart field 'file' with audio is required"))
+    private func transcribe(_ request: HTTPRequest) -> HTTPResponse {
+        let fields = multipartFields(request.body, contentType: request.headers["content-type"])
+        guard let upload = fields["file"], !upload.data.isEmpty else {
+            return .error(400, "multipart field 'file' with audio is required")
+        }
+        // OpenAI semantics: json carries only the text; verbose_json adds metadata.
+        let format = fields["response_format"].flatMap { String(data: $0.data, encoding: .utf8) } ?? "json"
+        guard ["json", "text", "verbose_json"].contains(format) else {
+            return .error(400, "unsupported response_format: \(format)")
         }
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("mac-dictation-api-\(UUID().uuidString)", isDirectory: true)
@@ -90,7 +94,7 @@ final class TranscriptionAPIServer: @unchecked Sendable {
                 attributes: [.posixPermissions: 0o700]
             )
             // CoreAudio infers the container from the extension, so keep the upload's.
-            let fileExtension = (upload.filename as NSString).pathExtension
+            let fileExtension = ((upload.filename ?? "") as NSString).pathExtension
             let audioURL = directory.appendingPathComponent(fileExtension.isEmpty ? "upload" : "upload.\(fileExtension)")
             try upload.data.write(to: audioURL)
             let started = CFAbsoluteTimeGetCurrent()
@@ -106,14 +110,19 @@ final class TranscriptionAPIServer: @unchecked Sendable {
                     + "audio=\(String(format: "%.3f", response.duration_seconds ?? 0))s "
                     + "total=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - started))s chars=\(text.count)"
             )
-            return (200, encode(TranscriptionBody(text: text, duration: response.duration_seconds)))
+            switch format {
+            case "text": return HTTPResponse(status: 200, contentType: "text/plain; charset=utf-8", body: Data(text.utf8))
+            case "verbose_json": return .json(VerboseTranscriptionBody(duration: response.duration_seconds, text: text))
+            default: return .json(TranscriptionBody(text: text))
+            }
         } catch {
             logEvent("transcription API request failed error=\(error)")
-            return (500, errorBody("\(error)", type: "server_error"))
+            return .error(500, "\(error)", type: "server_error")
         }
     }
 
-    private func respond(_ connection: NWConnection, status: Int, body: Data) {
+    private func respond(_ connection: NWConnection, _ response: HTTPResponse) {
+        let status = response.status
         let reason: String
         switch status {
         case 200: reason = "OK"
@@ -125,10 +134,28 @@ final class TranscriptionAPIServer: @unchecked Sendable {
         default: reason = "Internal Server Error"
         }
         var data = Data(
-            "HTTP/1.1 \(status) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8
+            "HTTP/1.1 \(status) \(reason)\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n".utf8
         )
-        data.append(body)
+        data.append(response.body)
         connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
+    }
+}
+
+private struct HTTPResponse {
+    let status: Int
+    let contentType: String
+    let body: Data
+
+    static func json<Value: Encodable>(_ value: Value) -> HTTPResponse {
+        HTTPResponse(status: 200, contentType: "application/json", body: encode(value))
+    }
+
+    static func error(_ status: Int, _ message: String, type: String = "invalid_request_error") -> HTTPResponse {
+        HTTPResponse(
+            status: status,
+            contentType: "application/json",
+            body: encode(ErrorBody(error: .init(message: message, type: type)))
+        )
     }
 }
 
@@ -179,34 +206,36 @@ private struct HTTPRequest {
     }
 }
 
-private func multipartFile(_ body: Data, contentType: String?) -> (filename: String, data: Data)? {
+private func multipartFields(_ body: Data, contentType: String?) -> [String: (filename: String?, data: Data)] {
     guard let contentType, contentType.lowercased().hasPrefix("multipart/form-data"),
           let boundaryStart = contentType.range(of: "boundary=", options: .caseInsensitive) else {
-        return nil
+        return [:]
     }
     let boundary = contentType[boundaryStart.upperBound...]
         .split(separator: ";")[0]
         .trimmingCharacters(in: CharacterSet(charactersIn: "\" "))
     let delimiter = Data("--\(boundary)".utf8)
     let headerSeparator = Data("\r\n\r\n".utf8)
+    var fields: [String: (filename: String?, data: Data)] = [:]
     var cursor = body.startIndex
     while let start = body.range(of: delimiter, in: cursor..<body.endIndex),
           let next = body.range(of: delimiter, in: start.upperBound..<body.endIndex) {
         let part = body[start.upperBound..<next.lowerBound]
         if let headerEnd = part.range(of: headerSeparator),
            let partHeaders = String(data: part[part.startIndex..<headerEnd.lowerBound], encoding: .utf8),
-           partHeaders.range(of: "; name=\"file\"", options: .caseInsensitive) != nil {
-            // The CRLF before the next delimiter belongs to the delimiter, not the file.
+           let name = headerValue("name", in: partHeaders) {
+            // The CRLF before the next delimiter belongs to the delimiter, not the field.
             let content = part[headerEnd.upperBound..<part.endIndex].dropLast(2)
-            return (headerValue("filename", in: partHeaders) ?? "", Data(content))
+            fields[name] = (headerValue("filename", in: partHeaders), Data(content))
         }
         cursor = next.lowerBound
     }
-    return nil
+    return fields
 }
 
 private func headerValue(_ name: String, in headers: String) -> String? {
-    guard let start = headers.range(of: "\(name)=\"", options: .caseInsensitive),
+    // The leading space keeps "name" from matching inside "filename".
+    guard let start = headers.range(of: " \(name)=\"", options: .caseInsensitive),
           let end = headers[start.upperBound...].firstIndex(of: "\"") else {
         return nil
     }
@@ -221,7 +250,12 @@ private struct HealthBody: Encodable {
 
 private struct TranscriptionBody: Encodable {
     let text: String
+}
+
+private struct VerboseTranscriptionBody: Encodable {
+    let task = "transcribe"
     let duration: Double?
+    let text: String
 }
 
 private struct ErrorBody: Encodable {
@@ -231,10 +265,6 @@ private struct ErrorBody: Encodable {
     }
 
     let error: Detail
-}
-
-private func errorBody(_ message: String, type: String = "invalid_request_error") -> Data {
-    encode(ErrorBody(error: .init(message: message, type: type)))
 }
 
 private func encode<Value: Encodable>(_ value: Value) -> Data {
