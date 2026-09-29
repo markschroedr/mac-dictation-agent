@@ -16,6 +16,8 @@ class CaptureConfig:
     min_segment_ms: int = 800
     max_segment_ms: int = 4 * 60 * 1000
     input_device: str | int | None = None
+    include_system_audio: bool = True
+    system_audio_helper: str | None = None
     queue_max_frames: int = 256
     opus_bitrate: str = "48k"
     digital_silence_timeout_seconds: float = 3.0

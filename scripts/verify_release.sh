@@ -66,6 +66,7 @@ codesign --verify --deep --strict "$APP_DIR"
 plutil -lint "$APP_DIR/Contents/Info.plist" "$PLIST"
 file "$APP_DIR/Contents/MacOS/MacDictationAgent" | grep -q 'arm64'
 file "$APP_DIR/Contents/Helpers/FluidDictationService" | grep -q 'arm64'
+file "$APP_DIR/Contents/Helpers/SystemAudioCapture" | grep -q 'arm64'
 
 MAC_DICTATION_DATA_ROOT="$DATA_ROOT" \
   "$APP_DIR/Contents/MacOS/MacDictationAgent" --audio-retention-test
@@ -82,7 +83,8 @@ fi
 
 for executable in \
   "$APP_DIR/Contents/MacOS/MacDictationAgent" \
-  "$APP_DIR/Contents/Helpers/FluidDictationService"; do
+  "$APP_DIR/Contents/Helpers/FluidDictationService" \
+  "$APP_DIR/Contents/Helpers/SystemAudioCapture"; do
   if strings "$executable" | grep -E \
     '/Users/markschroeder|Private Docs|private-mac|tailscale|github-private|id_ed25519' \
     >/dev/null; then

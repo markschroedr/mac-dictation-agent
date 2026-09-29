@@ -4,6 +4,8 @@ import logging
 import os
 import queue
 import signal
+import subprocess
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,8 +13,12 @@ from pathlib import Path
 import sounddevice as sd
 import webrtcvad
 
+from .capture_health import (
+    CaptureSignalMonitor,
+    DigitalSilenceError,
+    write_capture_health,
+)
 from .config import AppPaths, CaptureConfig
-from .capture_health import CaptureSignalMonitor, DigitalSilenceError, write_capture_health
 from .process_state import read_live_pid, stop_process, write_process_state
 from .segment_writer import FinalizedSegment, SegmentWriter
 from .vad import VadSegmenter
@@ -29,6 +35,10 @@ class CaptureService:
         self.writer = SegmentWriter(paths=paths, config=config)
         self._stop = False
         self._dropped_frames = 0
+        self._system_audio = bytearray()
+        self._system_audio_lock = threading.Lock()
+        self._system_audio_process: subprocess.Popen[bytes] | None = None
+        self._system_audio_thread: threading.Thread | None = None
 
     def run_forever(self) -> None:
         self.paths.ensure()
@@ -52,6 +62,8 @@ class CaptureService:
             if frames <= 0:
                 return
             payload = bytes(indata)
+            if self.config.include_system_audio:
+                payload = self._mix_system_audio(payload)
             now = datetime.now(UTC)
             try:
                 self.frame_queue.put_nowait((payload, now))
@@ -63,6 +75,8 @@ class CaptureService:
         self._install_signal_handlers()
         blocksize = self.config.sample_rate_hz * self.config.frame_ms // 1000
         try:
+            if self.config.include_system_audio:
+                self._start_system_audio()
             with sd.RawInputStream(
                 samplerate=self.config.sample_rate_hz,
                 channels=self.config.channels,
@@ -148,6 +162,7 @@ class CaptureService:
                         pcm_path=flushed.pcm_path,
                     )
                 )
+            self._stop_system_audio()
             self.writer.close()
             self._remove_pid()
             if not failed:
@@ -158,6 +173,64 @@ class CaptureService:
                     device=self.config.input_device,
                 )
             self.logger.info("capture stopped")
+
+    def _start_system_audio(self) -> None:
+        helper = self.config.system_audio_helper
+        if not helper or not Path(helper).is_file():
+            raise RuntimeError("system audio capture helper is missing; reinstall Mac Dictation Agent")
+        self._system_audio_process = subprocess.Popen(
+            [helper],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        time.sleep(0.5)
+        if self._system_audio_process.poll() is not None:
+            assert self._system_audio_process.stderr is not None
+            detail = self._system_audio_process.stderr.read().decode("utf-8", errors="replace").strip()
+            raise RuntimeError(detail or "system audio capture could not start")
+
+        def read_audio() -> None:
+            assert self._system_audio_process is not None
+            assert self._system_audio_process.stdout is not None
+            while not self._stop:
+                chunk = self._system_audio_process.stdout.read(32_000)
+                if not chunk:
+                    break
+                with self._system_audio_lock:
+                    self._system_audio.extend(chunk)
+                    maximum = self.config.sample_rate_hz * 2
+                    if len(self._system_audio) > maximum:
+                        del self._system_audio[:-maximum]
+
+        self._system_audio_thread = threading.Thread(target=read_audio, daemon=True)
+        self._system_audio_thread.start()
+
+    def _mix_system_audio(self, microphone: bytes) -> bytes:
+        with self._system_audio_lock:
+            take = min(len(microphone), len(self._system_audio))
+            system = bytes(self._system_audio[:take])
+            del self._system_audio[:take]
+        if take < len(microphone):
+            system += bytes(len(microphone) - take)
+        mixed = bytearray(len(microphone))
+        for offset in range(0, len(microphone), 2):
+            mic = int.from_bytes(microphone[offset : offset + 2], "little", signed=True)
+            desktop = int.from_bytes(system[offset : offset + 2], "little", signed=True)
+            value = max(-32768, min(32767, mic + desktop))
+            mixed[offset : offset + 2] = value.to_bytes(2, "little", signed=True)
+        return bytes(mixed)
+
+    def _stop_system_audio(self) -> None:
+        process = self._system_audio_process
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        if self._system_audio_thread is not None:
+            self._system_audio_thread.join(timeout=2)
 
     def stop(self) -> bool:
         return stop_process(self.paths.pid_file, timeout_seconds=10.0)

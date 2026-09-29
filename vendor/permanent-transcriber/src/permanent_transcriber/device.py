@@ -100,6 +100,16 @@ def clear_preferred_input_device(paths: AppPaths) -> None:
         save_app_config(paths, app_config)
 
 
+def include_system_audio(paths: AppPaths) -> bool:
+    return bool(load_app_config(paths).get("include_system_audio", True))
+
+
+def set_include_system_audio(paths: AppPaths, enabled: bool) -> None:
+    app_config = load_app_config(paths)
+    app_config["include_system_audio"] = enabled
+    save_app_config(paths, app_config)
+
+
 def _resolve_explicit_device(requested: str, devices: list[dict[str, Any]]) -> tuple[int | str, dict[str, Any]]:
     if requested.isdigit():
         index = int(requested)

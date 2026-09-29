@@ -25,6 +25,7 @@ trap 'echo "build workspace: $STAGING_ROOT"' EXIT
 STAGED_APP="$STAGING_ROOT/MacDictationAgent.app"
 APP_BIN="$STAGED_APP/Contents/MacOS/MacDictationAgent"
 APP_HELPER="$STAGED_APP/Contents/Helpers/FluidDictationService"
+SYSTEM_AUDIO_HELPER="$STAGED_APP/Contents/Helpers/SystemAudioCapture"
 APP_ICON="$STAGED_APP/Contents/Resources/AppIcon.icns"
 ICONSET="$STAGING_ROOT/AppIcon.iconset"
 BUILD_ROOT="${MAC_DICTATION_BUILD_ROOT:-${TMPDIR:-/tmp}/mac-dictation-agent-swift-build}"
@@ -44,8 +45,9 @@ swift build \
   --scratch-path "$BUILD_ROOT"
 cp "$BUILD_ROOT/release/MacDictationAgent" "$APP_BIN"
 cp "$BUILD_ROOT/release/FluidDictationService" "$APP_HELPER"
-chmod +x "$APP_BIN" "$APP_HELPER"
-strip -S "$APP_BIN" "$APP_HELPER"
+cp "$BUILD_ROOT/release/SystemAudioCapture" "$SYSTEM_AUDIO_HELPER"
+chmod +x "$APP_BIN" "$APP_HELPER" "$SYSTEM_AUDIO_HELPER"
+strip -S "$APP_BIN" "$APP_HELPER" "$SYSTEM_AUDIO_HELPER"
 swift "$SOURCE_ROOT/scripts/create_app_icon.swift" "$ICONSET"
 iconutil -c icns "$ICONSET" -o "$APP_ICON"
 
@@ -76,6 +78,8 @@ cat > "$STAGED_APP/Contents/Info.plist" <<PLIST
   <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Mac Dictation Agent records audio only when you start dictation or continuous transcription.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Mac Dictation Agent captures system audio when you enable it for continuous transcription.</string>
 </dict>
 </plist>
 PLIST
@@ -86,6 +90,11 @@ codesign \
   --sign - \
   --identifier "$BUNDLE_ID.fluid-asr" \
   "$APP_HELPER" >/dev/null
+codesign \
+  --force \
+  --sign - \
+  --identifier "$BUNDLE_ID.system-audio" \
+  "$SYSTEM_AUDIO_HELPER" >/dev/null
 codesign \
   --force \
   --sign - \

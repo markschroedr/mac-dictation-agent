@@ -60,6 +60,7 @@ if [[ "${1:-}" != "--activate" ]]; then
   codesign --verify --deep --strict "$ROOT/MacDictationAgent.app"
   [[ -x "$ROOT/MacDictationAgent.app/Contents/MacOS/MacDictationAgent" ]]
   [[ -x "$ROOT/MacDictationAgent.app/Contents/Helpers/FluidDictationService" ]]
+  [[ -x "$ROOT/MacDictationAgent.app/Contents/Helpers/SystemAudioCapture" ]]
 
   PLAN="$ROOT/installation.plist"
   plutil -create xml1 "$PLAN"
@@ -80,6 +81,7 @@ if [[ "${1:-}" != "--activate" ]]; then
   add_env MAC_DICTATION_MODEL_ROOT "$MODEL_ROOT"
   add_env MAC_DICTATION_FLUID_MODEL_ROOT "$FLUID_ROOT"
   add_env MAC_DICTATION_FLUID_SERVICE_BIN "$APP_DIR/Contents/Helpers/FluidDictationService"
+  add_env MAC_DICTATION_SYSTEM_AUDIO_HELPER "$APP_DIR/Contents/Helpers/SystemAudioCapture"
   add_env MAC_DICTATION_SUPERTONIC_TTS_SERVICE_BIN "$ROOT/supertonic_worker/.venv/bin/supertonic-tts-worker"
   add_env MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT "$TTS_ROOT"
   add_env MAC_DICTATION_TTS_IDLE_SECONDS "${MAC_DICTATION_TTS_IDLE_SECONDS:-300}"

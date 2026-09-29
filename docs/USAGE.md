@@ -45,7 +45,7 @@ The Python environments use about 1 GB. Models download on first use. Keep rough
 
 ### Continuous transcription
 
-Choose a microphone and mode from the menu, then start continuous transcription.
+Choose a microphone and mode from the menu, then start continuous transcription. Microphone and system audio are included by default. Turn off **Include System Audio** before starting when you want microphone-only capture. macOS requests Screen & System Audio Recording permission the first time.
 
 - **Canonical Only** writes larger durable batches, speaker-labelled variants, and compacted archival audio.
 - **Quick + Canonical** also writes smaller provisional batches.

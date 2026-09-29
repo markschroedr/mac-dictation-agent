@@ -51,6 +51,9 @@ let fluidModelRoot = ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_MO
 let fluidServiceExecutable = ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_SERVICE_BIN"].map {
     URL(fileURLWithPath: $0)
 } ?? Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/FluidDictationService")
+let systemAudioHelperExecutable = ProcessInfo.processInfo.environment["MAC_DICTATION_SYSTEM_AUDIO_HELPER"].map {
+    URL(fileURLWithPath: $0)
+} ?? Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/SystemAudioCapture")
 let supertonicTTSServiceExecutable = ProcessInfo.processInfo.environment[
     "MAC_DICTATION_SUPERTONIC_TTS_SERVICE_BIN"
 ].map {
@@ -3141,6 +3144,7 @@ struct PermanentTranscriberStatus {
     let captureRunning: Bool
     let captureHealthy: Bool
     let captureError: String?
+    let includesSystemAudio: Bool
     let quickRunning: Bool
     let relaxedRunning: Bool
 
@@ -3181,6 +3185,7 @@ final class PermanentTranscriberController {
                 captureRunning: false,
                 captureHealthy: false,
                 captureError: "Could not read permanent-transcriber status",
+                includesSystemAudio: true,
                 quickRunning: false,
                 relaxedRunning: false
             )
@@ -3193,6 +3198,7 @@ final class PermanentTranscriberController {
             captureRunning: capture?["running"] as? Bool ?? false,
             captureHealthy: capture?["healthy"] as? Bool ?? false,
             captureError: capture?["error"] as? String,
+            includesSystemAudio: capture?["include_system_audio"] as? Bool ?? true,
             quickRunning: quick?["running"] as? Bool ?? false,
             relaxedRunning: relaxed?["running"] as? Bool ?? false
         )
@@ -3246,6 +3252,9 @@ final class PermanentTranscriberController {
             let outcome: Result<Void, PermanentTranscriberError>
             do {
                 try self.requireMicrophoneAccess()
+                if self.includesSystemAudio() {
+                    try self.requireSystemAudioAccess()
+                }
                 var args = ["start"]
                 if mode == .quickAndRelaxed {
                     args.append("--quick")
@@ -3280,6 +3289,28 @@ final class PermanentTranscriberController {
         }
     }
 
+    func includesSystemAudio() -> Bool {
+        let result = runTool(["capture-settings"])
+        guard result.status == 0,
+              let data = result.output.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return true }
+        return object["include_system_audio"] as? Bool ?? true
+    }
+
+    func setSystemAudio(enabled: Bool, completion: @escaping @MainActor @Sendable (Result<Void, PermanentTranscriberError>) -> Void) {
+        queue.async {
+            let result = self.runTool(["system-audio", enabled ? "true" : "false"])
+            Task { @MainActor in
+                if result.status == 0 {
+                    completion(.success(()))
+                } else {
+                    completion(.failure(.failed(result.output.isEmpty ? "could not update system audio setting" : result.output)))
+                }
+            }
+        }
+    }
+
     func setDevice(index: Int, completion: @escaping @MainActor @Sendable (Result<Void, PermanentTranscriberError>) -> Void) {
         queue.async {
             let result = self.runTool(["set-device", "\(index)"])
@@ -3305,6 +3336,18 @@ final class PermanentTranscriberController {
             arguments,
             environment: sharedPermanentTranscriberEnvironment(),
             currentDirectory: permanentTranscriberCodeRoot
+        )
+    }
+
+    private func requireSystemAudioAccess() throws {
+        guard FileManager.default.isExecutableFile(atPath: systemAudioHelperExecutable.path) else {
+            throw PermanentTranscriberError.failed("System audio capture helper is missing. Reinstall Mac Dictation Agent.")
+        }
+        if CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() {
+            return
+        }
+        throw PermanentTranscriberError.failed(
+            "System audio access was not granted. Enable Mac Dictation in System Settings > Privacy & Security > Screen & System Audio Recording, then restart the app."
         )
     }
 
@@ -3366,6 +3409,7 @@ func sharedPermanentTranscriberEnvironment() -> [String: String] {
         "MAC_DICTATION_MODEL_ROOT": sharedModelRoot.path,
         "MAC_DICTATION_MLX_CACHE": sharedModelRoot.appendingPathComponent("mlx-cache").path,
         "PERMANENT_TRANSCRIBER_ROOT": permanentTranscriberDataRoot.path,
+        "MAC_DICTATION_SYSTEM_AUDIO_HELPER": systemAudioHelperExecutable.path,
         "HF_HOME": sharedModelRoot.appendingPathComponent("huggingface").path,
         "HUGGINGFACE_HUB_CACHE": sharedModelRoot.appendingPathComponent("huggingface/hub").path,
         "XDG_CACHE_HOME": sharedModelRoot.appendingPathComponent("xdg-cache").path,
@@ -3387,6 +3431,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let permanentTranscriberModeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
     private let permanentTranscriberControlItem = NSMenuItem(title: "Start Continuous Recording", action: #selector(togglePermanentTranscriber), keyEquivalent: "")
     private let permanentTranscriberDeviceItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+    private let permanentSystemAudioItem = NSMenuItem(
+        title: "Include System Audio",
+        action: #selector(togglePermanentSystemAudio),
+        keyEquivalent: ""
+    )
     private let openPermanentFolderItem = NSMenuItem(title: "Open Recording Folder", action: #selector(openPermanentTranscriberFolder), keyEquivalent: "")
     private let recentDictationsItem = NSMenuItem(title: "Dictations", action: nil, keyEquivalent: "")
     private let recentPermanentRelaxedItem = NSMenuItem(title: "Continuous - Canonical", action: nil, keyEquivalent: "")
@@ -3406,6 +3455,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         captureRunning: false,
         captureHealthy: false,
         captureError: nil,
+        includesSystemAudio: true,
         quickRunning: false,
         relaxedRunning: false
     )
@@ -3530,6 +3580,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         permanentTranscriberModeItem.submenu = modeMenu
         continuousRecordingMenu.addItem(permanentTranscriberModeItem)
         continuousRecordingMenu.addItem(permanentTranscriberDeviceItem)
+        permanentSystemAudioItem.target = self
+        continuousRecordingMenu.addItem(permanentSystemAudioItem)
 
         continuousRecordingMenu.addItem(.separator())
         openPermanentFolderItem.target = self
@@ -3603,6 +3655,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         updateTTSLanguageState()
         applyPermanentTranscriberState(permanentTranscriberStatus)
         updatePermanentTranscriberModeState()
+        updatePermanentSystemAudioState(permanentTranscriberStatus)
         rebuildRecentMenus()
         rebuildMicrophoneMenu()
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
@@ -3617,6 +3670,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
         applyPermanentTranscriberState(permanentTranscriberStatus)
         updatePermanentTranscriberModeState()
+        updatePermanentSystemAudioState(permanentTranscriberStatus)
         updateRecoveryRetentionState()
         refreshPermanentTranscriberState()
         refreshPermanentTranscriberDevices()
@@ -3856,6 +3910,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         logEvent("permanent transcriber mode selected mode=\(mode.rawValue)")
     }
 
+    @objc private func togglePermanentSystemAudio() {
+        guard !permanentTranscriberStatus.isRunning else { return }
+        let enabled = !permanentTranscriberStatus.includesSystemAudio
+        permanentTranscriber.setSystemAudio(enabled: enabled) { [weak self] result in
+            self?.handlePermanentTranscriberResult(result)
+            self?.refreshPermanentTranscriberState()
+        }
+    }
+
     @objc private func selectPermanentTranscriberDevice(_ sender: NSMenuItem) {
         guard let index = sender.representedObject as? Int else { return }
         permanentTranscriber.setDevice(index: index) { [weak self] result in
@@ -3929,6 +3992,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
     }
 
+    private func updatePermanentSystemAudioState(_ status: PermanentTranscriberStatus) {
+        permanentSystemAudioItem.state = status.includesSystemAudio ? .on : .off
+        permanentSystemAudioItem.isEnabled = !status.isRunning
+        permanentSystemAudioItem.toolTip = status.isRunning
+            ? "Stop continuous recording before changing audio sources"
+            : nil
+    }
+
     private func updatePermanentTranscriberModeState() {
         let currentMode = PermanentTranscriberMode.current()
         for (mode, item) in permanentModeItems {
@@ -3974,6 +4045,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             permanentTranscriberStatusItem.title = "Status: Stopped"
             permanentTranscriberStatusItem.toolTip = nil
         }
+        updatePermanentSystemAudioState(status)
         updateStatusIcon()
     }
 

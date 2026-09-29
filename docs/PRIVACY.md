@@ -9,7 +9,7 @@ The following workflows run on the Mac:
 - Push-to-talk dictation.
 - Audio and video file transcription.
 - Batch transcription.
-- Continuous microphone transcription.
+- Continuous microphone and optional system-audio transcription.
 - Speaker diarization.
 - Supertonic text-to-speech.
 

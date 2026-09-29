@@ -35,6 +35,10 @@
 
 ## Continuous transcription
 
+- Let the user include or exclude system audio from continuous recording.
+- Include microphone and system audio by default.
+- Mix selected audio sources into one transcription stream.
+- Do not let the user change audio sources while continuous recording runs.
 - Rotate continuous speech into audio segments after 4 minutes.
 - Transcribe completed segments while capture continues.
 

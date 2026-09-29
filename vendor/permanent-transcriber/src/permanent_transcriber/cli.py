@@ -9,22 +9,26 @@ from pathlib import Path
 
 import typer
 
-from .config import CaptureConfig, default_paths
 from .capture_health import read_capture_health
+from .config import CaptureConfig, default_paths
 from .process_state import read_live_pid
 
 app = typer.Typer(help="Always-on local speech capture pipeline.")
 
 
 def build_config(paths, device: str | None = None, announce: bool = True) -> CaptureConfig:
-    from .device import resolve_input_device
+    from .device import include_system_audio, resolve_input_device
 
     resolved_device, details = resolve_input_device(paths, requested=device)
     if announce:
         typer.echo(
             f"using input device [{details['strategy']}] {details['device']['index']}: {details['device']['name']}"
         )
-    return CaptureConfig(input_device=resolved_device)
+    return CaptureConfig(
+        input_device=resolved_device,
+        include_system_audio=include_system_audio(paths),
+        system_audio_helper=os.environ.get("MAC_DICTATION_SYSTEM_AUDIO_HELPER"),
+    )
 
 
 def read_pid(path: Path) -> int | None:
@@ -262,6 +266,8 @@ def stop() -> None:
 @app.command()
 def status() -> None:
     """Show background capture and worker status."""
+    from .device import include_system_audio
+
     paths = default_paths()
     capture_pid = read_pid(paths.pid_file)
     capture_health = read_capture_health(paths.capture_health_file)
@@ -288,6 +294,7 @@ def status() -> None:
                     "pid": capture_pid,
                     "error": capture_health.get("error"),
                     "health_updated_at": capture_health.get("updated_at"),
+                    "include_system_audio": include_system_audio(paths),
                 },
                 "workers": workers,
             },
@@ -333,6 +340,28 @@ def clear_device_cmd() -> None:
     paths.ensure()
     clear_preferred_input_device(paths)
     typer.echo("preferred input device cleared")
+
+
+@app.command("system-audio")
+def system_audio_cmd(
+    enabled: bool = typer.Argument(..., help="Whether continuous capture includes system audio."),
+) -> None:
+    """Persist the system-audio capture choice."""
+    from .device import set_include_system_audio
+
+    paths = default_paths()
+    paths.ensure()
+    set_include_system_audio(paths, enabled)
+    typer.echo(f"system audio {'enabled' if enabled else 'disabled'}")
+
+
+@app.command("capture-settings")
+def capture_settings() -> None:
+    """Show persisted capture choices."""
+    from .device import include_system_audio
+
+    paths = default_paths()
+    print(json.dumps({"include_system_audio": include_system_audio(paths)}))
 
 
 @app.command()

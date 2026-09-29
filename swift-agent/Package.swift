@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .executable(name: "MacDictationAgent", targets: ["MacDictationAgent"]),
         .executable(name: "FluidDictationService", targets: ["FluidDictationService"]),
+        .executable(name: "SystemAudioCapture", targets: ["SystemAudioCapture"]),
     ],
     dependencies: [
         .package(
@@ -24,6 +25,7 @@ let package = Package(
                 "LocalTTSServiceProtocol",
             ]
         ),
+        .executableTarget(name: "SystemAudioCapture"),
         .executableTarget(
             name: "FluidDictationService",
             dependencies: [
