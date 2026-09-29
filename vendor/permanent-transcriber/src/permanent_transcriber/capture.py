@@ -19,7 +19,7 @@ from .capture_health import (
     write_capture_health,
 )
 from .config import AppPaths, CaptureConfig
-from .process_state import read_live_pid, stop_process, write_process_state
+from .process_state import acquire_process_lock, read_live_pid, stop_process
 from .segment_writer import FinalizedSegment, SegmentWriter
 from .vad import VadSegmenter
 
@@ -42,7 +42,7 @@ class CaptureService:
 
     def run_forever(self) -> None:
         self.paths.ensure()
-        self._write_pid()
+        acquire_process_lock(self.paths.pid_file, "capture")
         self.writer.start()
         monitor = CaptureSignalMonitor(self.config.digital_silence_timeout_seconds)
         healthy = False
@@ -164,7 +164,6 @@ class CaptureService:
                 )
             self._stop_system_audio()
             self.writer.close()
-            self._remove_pid()
             if not failed:
                 write_capture_health(
                     self.paths.capture_health_file,
@@ -238,20 +237,6 @@ class CaptureService:
     @staticmethod
     def read_pid(path: Path) -> int | None:
         return read_live_pid(path)
-
-    def _write_pid(self) -> None:
-        existing = self.read_pid(self.paths.pid_file)
-        if existing is not None:
-            try:
-                os.kill(existing, 0)
-            except OSError:
-                pass
-            else:
-                raise RuntimeError(f"capture already running with pid {existing}")
-        write_process_state(self.paths.pid_file)
-
-    def _remove_pid(self) -> None:
-        self.paths.pid_file.unlink(missing_ok=True)
 
     def _install_signal_handlers(self) -> None:
         def handle_stop(signum, frame) -> None:

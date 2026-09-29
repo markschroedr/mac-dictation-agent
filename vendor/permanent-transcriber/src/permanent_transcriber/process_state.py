@@ -1,78 +1,85 @@
+"""Single-instance process records.
+
+A process holds an exclusive lock on its record file for its whole lifetime.
+The kernel releases the lock only when the process exits, so the lock decides
+whether the recorded process is alive. Nobody deletes a record: a stale file
+without a lock holder simply means the process is gone.
+"""
+
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from pathlib import Path
 import signal
-import subprocess
 import time
 
-
-def process_snapshot(pid: int) -> dict[str, object] | None:
-    if pid <= 0:
-        return None
-    try:
-        started_at = subprocess.run(
-            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-        command = subprocess.run(
-            ["/bin/ps", "-ww", "-p", str(pid), "-o", "command="],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    except subprocess.CalledProcessError:
-        return None
-    if not started_at or not command:
-        return None
-    return {"pid": pid, "started_at": started_at, "command": command}
+_held_locks: dict[Path, int] = {}
 
 
-def write_process_state(path: Path) -> None:
-    snapshot = process_snapshot(os.getpid())
-    if snapshot is None:
-        raise RuntimeError("could not read current process identity")
+def acquire_process_lock(path: Path, name: str) -> None:
+    """Record the current process in PATH, or fail when another live process holds it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(snapshot, sort_keys=True), encoding="utf-8")
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(descriptor)
+        raise RuntimeError(f"{name} already running with pid {read_live_pid(path)}") from None
+    os.ftruncate(descriptor, 0)
+    os.write(descriptor, json.dumps({"pid": os.getpid()}).encode())
+    # Kept open, and not inherited by children, until this process exits.
+    _held_locks[path] = descriptor
 
 
 def read_live_pid(path: Path) -> int | None:
     try:
-        expected = json.loads(path.read_text(encoding="utf-8"))
-        pid = int(expected["pid"])
-        started_at = str(expected["started_at"])
-        command = str(expected["command"])
-    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-        path.unlink(missing_ok=True)
+        descriptor = os.open(path, os.O_RDONLY)
+    except FileNotFoundError:
         return None
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return _recorded_pid(descriptor)
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return None
+    finally:
+        os.close(descriptor)
 
-    actual = process_snapshot(pid)
-    if actual is None or actual["started_at"] != started_at or actual["command"] != command:
-        path.unlink(missing_ok=True)
-        return None
-    return pid
+
+def _recorded_pid(descriptor: int) -> int:
+    # The holder writes its pid right after locking; wait out that short window.
+    deadline = time.monotonic() + 1.0
+    while True:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        try:
+            return int(json.loads(os.read(descriptor, 4096))["pid"])
+        except (KeyError, TypeError, ValueError):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("process record is locked but has no pid") from None
+            time.sleep(0.01)
 
 
 def stop_process(path: Path, timeout_seconds: float = 5.0) -> bool:
+    """Signal the recorded process and return once it has actually exited."""
     pid = read_live_pid(path)
     if pid is None:
         return False
     os.kill(pid, signal.SIGTERM)
+    if _wait_for_exit(path, timeout_seconds):
+        return True
+    os.kill(pid, signal.SIGKILL)
+    if _wait_for_exit(path, 2.0):
+        return True
+    raise RuntimeError(f"process {pid} did not exit after SIGKILL")
+
+
+def _wait_for_exit(path: Path, timeout_seconds: float) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        if read_live_pid(path) != pid:
+        if read_live_pid(path) is None:
             return True
         time.sleep(0.05)
-    if read_live_pid(path) == pid:
-        os.kill(pid, signal.SIGKILL)
-        kill_deadline = time.monotonic() + 2.0
-        while time.monotonic() < kill_deadline:
-            if read_live_pid(path) != pid:
-                return True
-            time.sleep(0.05)
-        raise RuntimeError(f"process {pid} did not exit after SIGKILL")
-    path.unlink(missing_ok=True)
-    return True
+    return read_live_pid(path) is None

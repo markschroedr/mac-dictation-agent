@@ -16,7 +16,7 @@ from .config import AppPaths
 from .diarization import SortformerDiarizer, asr_segments_from_result
 from .ffmpeg_tools import reencode_audio_to_opus, sha256_file
 from .manifest import append_jsonl, append_text, load_json, read_jsonl, write_json
-from .process_state import read_live_pid, stop_process, write_process_state
+from .process_state import acquire_process_lock, read_live_pid, stop_process
 
 
 @dataclass(slots=True)
@@ -99,7 +99,7 @@ class TranscriptionWorker:
     def run_forever(self) -> None:
         self.paths.ensure()
         self._load_state()
-        self._write_pid()
+        acquire_process_lock(self.pid_file, f"{self.profile.name} worker")
         try:
             self._install_signal_handlers()
             self.logger.info("worker started profile=%s", self.profile.name)
@@ -108,11 +108,8 @@ class TranscriptionWorker:
                 if processed == 0:
                     self._stop_event.wait(self.profile.poll_seconds)
         finally:
-            try:
-                self._drain_pending()
-            finally:
-                self._remove_pid()
-                self.logger.info("worker stopped profile=%s", self.profile.name)
+            self._drain_pending()
+            self.logger.info("worker stopped profile=%s", self.profile.name)
 
     def run_once(
         self,
@@ -512,20 +509,6 @@ class TranscriptionWorker:
         self._state["updated_at"] = datetime.now(UTC).isoformat()
         self._state["profile"] = self.profile.name
         write_json(self.state_file, self._state)
-
-    def _write_pid(self) -> None:
-        existing = self.read_pid(self.pid_file)
-        if existing is not None:
-            try:
-                os.kill(existing, 0)
-            except OSError:
-                pass
-            else:
-                raise RuntimeError(f"worker already running with pid {existing}")
-        write_process_state(self.pid_file)
-
-    def _remove_pid(self) -> None:
-        self.pid_file.unlink(missing_ok=True)
 
     def _install_signal_handlers(self) -> None:
         def handle_stop(signum, frame) -> None:

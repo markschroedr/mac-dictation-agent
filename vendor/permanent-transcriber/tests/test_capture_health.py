@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -16,7 +18,7 @@ from permanent_transcriber.capture_health import (
 )
 from permanent_transcriber.cli import ensure_capture_launch_allowed, wait_for_capture_health, wait_for_worker_ready
 from permanent_transcriber.config import CaptureConfig, default_paths
-from permanent_transcriber.process_state import read_live_pid, write_process_state
+from permanent_transcriber.process_state import acquire_process_lock, read_live_pid, stop_process
 from permanent_transcriber.vad import VadSegmenter
 from permanent_transcriber.worker import TranscriptionWorker
 
@@ -89,31 +91,34 @@ class CaptureHealthFileTests(unittest.TestCase):
                 wait_for_capture_health(paths, process, timeout_seconds=0.1)
 
 
-class ProcessStateTests(unittest.TestCase):
-    def test_stale_pid_is_removed(self) -> None:
+class ProcessLockTests(unittest.TestCase):
+    def test_live_holder_stays_visible_until_it_exits(self) -> None:
+        # A live recorder that no check can see is how duplicate captures started.
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "capture.pid"
-            path.write_text('{"pid": 999999, "started_at": "old", "command": "capture"}', encoding="utf-8")
-            with patch("permanent_transcriber.process_state.process_snapshot", return_value=None):
+            holder = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys, time; from pathlib import Path; "
+                    "from permanent_transcriber.process_state import acquire_process_lock; "
+                    "acquire_process_lock(Path(sys.argv[1]), 'capture'); print(flush=True); time.sleep(60)",
+                    str(path),
+                ],
+                stdout=subprocess.PIPE,
+            )
+            try:
+                holder.stdout.readline()
+                self.assertEqual(read_live_pid(path), holder.pid)
+                with self.assertRaisesRegex(RuntimeError, f"already running with pid {holder.pid}"):
+                    acquire_process_lock(path, "capture")
+                self.assertEqual(read_live_pid(path), holder.pid)
+                self.assertTrue(stop_process(path, timeout_seconds=5.0))
+                self.assertIsNotNone(holder.poll())
                 self.assertIsNone(read_live_pid(path))
-            self.assertFalse(path.exists())
-
-    def test_live_pid_is_returned(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "capture.pid"
-            write_process_state(path)
-            self.assertEqual(read_live_pid(path), os.getpid())
-
-    def test_reused_pid_is_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "capture.pid"
-            path.write_text('{"pid": 123, "started_at": "old", "command": "capture"}', encoding="utf-8")
-            with patch(
-                "permanent_transcriber.process_state.process_snapshot",
-                return_value={"pid": 123, "started_at": "new", "command": "unrelated"},
-            ):
-                self.assertIsNone(read_live_pid(path))
-            self.assertFalse(path.exists())
+            finally:
+                holder.kill()
+                holder.wait()
 
 
 class WorkerStartupTests(unittest.TestCase):
