@@ -19,6 +19,12 @@
 - Keep the replacement simple. Use a brief cutover with the previous app available for rollback.
 - Archive redundant repositories and runtime folders after verifying the replacement.
 
+## Continuous source audio
+
+- Preserve microphone and system audio as separate Opus tracks when recording both inputs.
+- Keep the separate source tracks for later participant attribution experiments.
+- Defer automatic participant attribution until a real two-source recording validates the approach.
+
 ## Dictation recovery
 
 - Save every interactive dictation directly in a durable session directory.
