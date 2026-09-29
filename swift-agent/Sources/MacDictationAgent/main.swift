@@ -3343,7 +3343,8 @@ final class PermanentTranscriberController {
         guard FileManager.default.isExecutableFile(atPath: systemAudioHelperExecutable.path) else {
             throw PermanentTranscriberError.failed("System audio capture helper is missing. Reinstall Mac Dictation Agent.")
         }
-        if CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() {
+        // The status menu asks on the main thread as soon as system audio is selected.
+        if CGPreflightScreenCaptureAccess() {
             return
         }
         throw PermanentTranscriberError.failed(
@@ -3451,6 +3452,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private var permanentModeItems: [PermanentTranscriberMode: NSMenuItem] = [:]
     private var isInteractiveRecording = false
     private var isPermanentRecording = false
+    private var systemAudioAccessRequested = false
     private var permanentTranscriberStatus = PermanentTranscriberStatus(
         captureRunning: false,
         captureHealthy: false,
@@ -4015,7 +4017,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             self.permanentTranscriberRefreshInFlight = false
             self.permanentTranscriberStatus = status
             self.applyPermanentTranscriberState(status)
+            self.requestSystemAudioAccessIfNeeded(status)
         }
+    }
+
+    /// macOS lists the app under Screen & System Audio Recording only after it asks once.
+    /// Ask as soon as system audio is selected, so access can be granted before recording starts.
+    private func requestSystemAudioAccessIfNeeded(_ status: PermanentTranscriberStatus) {
+        guard status.includesSystemAudio, !systemAudioAccessRequested, !CGPreflightScreenCaptureAccess() else { return }
+        systemAudioAccessRequested = true
+        logEvent("system audio access requested")
+        _ = CGRequestScreenCaptureAccess()
     }
 
     private func applyPermanentTranscriberState(_ status: PermanentTranscriberStatus) {
