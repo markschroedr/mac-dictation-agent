@@ -19,6 +19,20 @@
 - Keep the replacement simple. Use a brief cutover with the previous app available for rollback.
 - Archive redundant repositories and runtime folders after verifying the replacement.
 
+## Dictation recovery
+
+- Save every interactive dictation directly in a durable session directory.
+- Keep ordered audio chunks and the incremental transcript together.
+- Use a 24-hour recovery window by default.
+- Let the user select 24 hours, 7 days, 30 days, or forever.
+- Preserve the former explicit unlimited audio-retention choice as forever.
+- Move expired recovery sessions to macOS Trash.
+- Never prune an active or processing session.
+- Keep legacy diagnostic artifacts unchanged.
+- Log modifier-event occurrence time and handling time separately.
+- Log only modifier events. Include keycode, raw flags, source details, state action, stop reason, and session correlation.
+- Do not change the shortcut state machine without evidence for a specific cause.
+
 ## Progressive speech
 
 - Start every speech request with one natural 15-to-30-word chunk.

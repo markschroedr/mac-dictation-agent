@@ -25,29 +25,19 @@ The app can make these network requests:
 
 The app does not send microphone audio or transcripts to Inworld or xAI.
 
-## Dictation retention
+## Dictation recovery
 
-The app saves successful dictation transcripts in:
-
-```txt
-~/Library/Application Support/Mac Dictation Agent/transcripts/dictation/
-```
-
-The app deletes successful dictation audio by default.
-
-The app retains audio when transcription fails. It also retains suspiciously quiet audio. These files help recover speech that the normal path could not transcribe.
-
-Retained audio lives in:
+The app writes every interactive dictation directly to a durable session directory. Each directory contains ordered WAV chunks and an incremental `transcript.txt`:
 
 ```txt
-~/Library/Application Support/Mac Dictation Agent/recordings/retained/
+~/Library/Application Support/Mac Dictation Agent/recordings/recovery/
 ```
 
-Enable **Settings → Retain Successful Dictation Audio** to keep successful recordings. Those files live in:
+This includes successful, failed, interrupted, quiet, and empty dictations. The default recovery window is 24 hours. Choose another window under **Settings → Recovery Audio Retention**. The available choices are 24 hours, 7 days, 30 days, and forever. A former explicit **Keep Successful Dictation Audio** preference continues to mean forever until you choose a new window.
 
-```txt
-~/Library/Application Support/Mac Dictation Agent/recordings/successful/
-```
+Expiry moves complete session directories to macOS Trash. The app excludes active and processing sessions. It does not migrate or prune files in the former `recordings/retained/` or `recordings/successful/` directories.
+
+A process or computer crash can leave the current WAV header incomplete because macOS did not close the audio file. Earlier finalized chunks remain ordinary WAV files. The app does not claim that the current chunk is crash-proof.
 
 ## Other local data
 
@@ -59,7 +49,7 @@ Generated TTS audio lives in `tts-audio/`.
 
 Downloaded models live in `models/`.
 
-Logs live in `logs/`.
+Logs live in `logs/`. Hotkey diagnostics record only modifier events from the event tap. They include event and handling times, modifier keycodes and flags, event-source identifiers, state transitions, stop reasons, and dictation session IDs. Paste-request logs include the target process ID and bundle ID, clipboard write result, and physical modifier flags. They do not include transcript text or claim that the target accepted the paste. The app does not log ordinary typed keys.
 
 All paths are below:
 

@@ -40,7 +40,7 @@ On an M4 MacBook Air, a paced 5-minute recording finished about **0.6 seconds af
 
 ## Your words stay on your Mac
 
-Dictation has no analytics or cloud transcription. Transcripts are saved locally. Successful audio is deleted by default; failed or unusually quiet recordings are kept for recovery.
+Dictation has no analytics or cloud transcription. Every dictation is saved locally with its transcript for 24 hours by default, including failed or empty sessions. Change the recovery window from the menu.
 
 Optional tools add file transcription, continuous recording, speaker labels, and local text-to-speech. Cloud voices are opt-in and send text to the provider you choose.
 

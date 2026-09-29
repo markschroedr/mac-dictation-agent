@@ -25,8 +25,7 @@ let dataRoot = ProcessInfo.processInfo.environment["MAC_DICTATION_DATA_ROOT"].ma
 let workerDir = agentRoot.appendingPathComponent("asr_worker")
 let logDir = dataRoot.appendingPathComponent("logs")
 let debugAudioDir = dataRoot.appendingPathComponent("recordings/debug")
-let retainedAudioDir = dataRoot.appendingPathComponent("recordings/retained")
-let successfulAudioDir = dataRoot.appendingPathComponent("recordings/successful")
+let dictationRecoveryDir = dataRoot.appendingPathComponent("recordings/recovery")
 let ttsAudioDir = dataRoot.appendingPathComponent("tts-audio")
 let ttsEnvFile = dataRoot.appendingPathComponent("tts.env")
 let dictationTranscriptsDir = dataRoot.appendingPathComponent("transcripts/dictation")
@@ -88,26 +87,47 @@ let fluidSessionPrepareTimeoutSeconds = Double(
 let fluidTranscribeTimeoutSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_TRANSCRIBE_TIMEOUT_SECONDS"] ?? "") ?? 30.0
 let audioInputDefaultsKey = "audioInputName"
 let retainSuccessfulAudioDefaultsKey = "retainSuccessfulDictationAudio"
+let recoveryRetentionHoursDefaultsKey = "dictationRecoveryRetentionHours"
+let defaultRecoveryRetentionHours = 24
 let launchAgentLabel = ProcessInfo.processInfo.environment["MAC_DICTATION_LAUNCH_AGENT_LABEL"]
     ?? "com.markschroedr.mac-dictation"
 let launchAgentPlist = FileManager.default.homeDirectoryForCurrentUser
     .appendingPathComponent("Library/LaunchAgents/\(launchAgentLabel).plist")
 let agentStartedAt = DispatchTime.now().uptimeNanoseconds
 
-func logEvent(_ message: String) {
+func isoTimestamp(_ date: Date) -> String {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - agentStartedAt) / 1_000_000_000
-    print("[\(formatter.string(from: Date())) +\(String(format: "%.3f", elapsed))s] \(message)")
+    return formatter.string(from: date)
 }
 
-enum AudioRetentionPreference {
-    static var retainSuccessfulDictations: Bool {
-        UserDefaults.standard.bool(forKey: retainSuccessfulAudioDefaultsKey)
+func logEvent(_ message: String) {
+    let elapsed = Double(DispatchTime.now().uptimeNanoseconds - agentStartedAt) / 1_000_000_000
+    print("[\(isoTimestamp(Date())) +\(String(format: "%.3f", elapsed))s] \(message)")
+}
+
+enum RecoveryRetentionPreference {
+    static let choices: [(hours: Int, title: String)] = [
+        (24, "24 Hours"),
+        (24 * 7, "7 Days"),
+        (24 * 30, "30 Days"),
+        (0, "Forever"),
+    ]
+
+    static var hours: Int {
+        if let configured = UserDefaults.standard.object(forKey: recoveryRetentionHoursDefaultsKey) as? NSNumber {
+            return max(0, configured.intValue)
+        }
+        // The former checkbox meant unlimited successful-audio retention. Preserve that
+        // explicit choice without rewriting the live preference domain during migration.
+        if UserDefaults.standard.bool(forKey: retainSuccessfulAudioDefaultsKey) {
+            return 0
+        }
+        return defaultRecoveryRetentionHours
     }
 
-    static func setRetainSuccessfulDictations(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: retainSuccessfulAudioDefaultsKey)
+    static func setHours(_ hours: Int) {
+        UserDefaults.standard.set(max(0, hours), forKey: recoveryRetentionHoursDefaultsKey)
     }
 }
 
@@ -1514,7 +1534,7 @@ final class AudioRecorder {
             } catch {
                 lastError = error
                 logEvent("audio recorder start attempt=\(attempt) failed error=\(error)")
-                cleanupCurrentRecording(removeFile: true)
+                cleanupCurrentRecording(removeFile: outputDirectory == nil)
                 if attempt < 2 {
                     Thread.sleep(forTimeInterval: 0.10)
                 }
@@ -1525,7 +1545,7 @@ final class AudioRecorder {
 
     private func startOnce(attempt: Int, outputDirectory: URL?, filename: String?) throws -> URL {
         let started = CFAbsoluteTimeGetCurrent()
-        cleanupCurrentRecording(removeFile: true)
+        cleanupCurrentRecording(removeFile: outputDirectory == nil)
         let url = try newAudioURL(outputDirectory: outputDirectory, filename: filename)
         let device = AudioInputDeviceSelection.current()
         var localFormat = format
@@ -1627,7 +1647,9 @@ final class AudioRecorder {
             } else if let localFile {
                 AudioFileClose(localFile)
             }
-            try? FileManager.default.removeItem(at: url)
+            if outputDirectory == nil {
+                try? FileManager.default.removeItem(at: url)
+            }
             throw error
         }
 
@@ -1642,7 +1664,7 @@ final class AudioRecorder {
         return url
     }
 
-    func rotate(outputDirectory: URL? = nil, filename: String? = nil) throws -> URL? {
+    func rotate(outputDirectory: URL? = nil, filename: String? = nil, context: String = "rotation") throws -> URL? {
         lock.lock()
         guard queue != nil, let completedURL = currentURL else {
             lock.unlock()
@@ -1681,7 +1703,9 @@ final class AudioRecorder {
                     AudioFileClose(segment.file)
                 }
             }
-            try? FileManager.default.removeItem(at: nextURL)
+            if outputDirectory == nil {
+                try? FileManager.default.removeItem(at: nextURL)
+            }
             return nil
         }
         let completedWriteIndex = ringWriteIndex
@@ -1700,19 +1724,19 @@ final class AudioRecorder {
                 droppedBuffers: droppedBuffers
             )
         }
-        logFinalizedSegment(finalized, context: "rotation")
+        logFinalizedSegment(finalized, context: context)
         guard hasCapturedAudio(at: completedURL) else {
             throw AudioRecorderError.noAudioCaptured(completedURL)
         }
         return completedURL
     }
 
-    func stop(postrollSeconds: Double = 0) throws -> URL? {
+    func stop(postrollSeconds: Double = 0, context: String = "stop") throws -> URL? {
         guard currentURL != nil else { return nil }
         if postrollSeconds > 0 {
             Thread.sleep(forTimeInterval: postrollSeconds)
         }
-        return try stopCurrentProcess()
+        return try stopCurrentProcess(context: context)
     }
 
     private func newAudioURL(outputDirectory: URL?, filename: String?) throws -> URL {
@@ -1722,18 +1746,27 @@ final class AudioRecorder {
         }
         try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
         let baseName = filename ?? "mac-dictation-\(UUID().uuidString).wav"
-        return outputDirectory.appendingPathComponent(baseName)
+        let requestedURL = outputDirectory.appendingPathComponent(baseName)
+        guard FileManager.default.fileExists(atPath: requestedURL.path) else {
+            return requestedURL
+        }
+        let stem = requestedURL.deletingPathExtension().lastPathComponent
+        let ext = requestedURL.pathExtension
+        let recoveredName = ext.isEmpty
+            ? "\(stem)-retry-\(UUID().uuidString)"
+            : "\(stem)-retry-\(UUID().uuidString).\(ext)"
+        return outputDirectory.appendingPathComponent(recoveredName)
     }
 
     private func cleanupCurrentRecording(removeFile: Bool) {
-        let url = stopQueueWithoutValidation()
+        let url = stopQueueWithoutValidation(context: "cleanup")
         if removeFile, let url {
             try? FileManager.default.removeItem(at: url)
         }
     }
 
-    private func stopCurrentProcess() throws -> URL {
-        guard let completedURL = stopQueueWithoutValidation() else {
+    private func stopCurrentProcess(context: String) throws -> URL {
+        guard let completedURL = stopQueueWithoutValidation(context: context) else {
             throw AudioRecorderError.noAudioCaptured(FileManager.default.temporaryDirectory)
         }
         guard hasCapturedAudio(at: completedURL) else {
@@ -1742,7 +1775,7 @@ final class AudioRecorder {
         return completedURL
     }
 
-    private func stopQueueWithoutValidation() -> URL? {
+    private func stopQueueWithoutValidation(context: String) -> URL? {
         lock.lock()
         let url = currentURL
         let localQueue = queue
@@ -1780,7 +1813,7 @@ final class AudioRecorder {
                 droppedBuffers: droppedBuffers
             )
         }
-        logFinalizedSegment(finalized, context: "stop input=\(deviceName)")
+        logFinalizedSegment(finalized, context: "\(context) input=\(deviceName)")
 
         lock.lock()
         ringReadIndex = 0
@@ -3361,11 +3394,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let recentManualItem = NSMenuItem(title: "Audio Files", action: nil, keyEquivalent: "")
     private let recentTTSAudioItem = NSMenuItem(title: "Recent Audio", action: nil, keyEquivalent: "")
     private let microphoneItem = NSMenuItem(title: "Dictation Microphone", action: nil, keyEquivalent: "")
-    private let retainSuccessfulAudioItem = NSMenuItem(
-        title: "Keep Successful Dictation Audio",
-        action: #selector(toggleSuccessfulAudioRetention),
-        keyEquivalent: ""
-    )
+    private let recoveryRetentionItem = NSMenuItem(title: "Recovery Audio Retention", action: nil, keyEquivalent: "")
+    private var recoveryRetentionItems: [Int: NSMenuItem] = [:]
     private let ttsStatusItem = NSMenuItem(title: "TTS: Idle", action: nil, keyEquivalent: "")
     private var ttsActionItems: [TTSProvider: NSMenuItem] = [:]
     private var ttsLanguageItems: [TTSLanguage: NSMenuItem] = [:]
@@ -3519,6 +3549,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         recentTranscriptsItem.submenu = recentTranscriptsMenu
         menu.addItem(recentTranscriptsItem)
 
+        let openRecoveryFolder = NSMenuItem(title: "Open Dictation Recovery", action: #selector(openRecoveryFolder), keyEquivalent: "")
+        openRecoveryFolder.target = self
+        menu.addItem(openRecoveryFolder)
+
         let openDataFolder = NSMenuItem(title: "Open Data Folder", action: #selector(openDataFolder), keyEquivalent: "")
         openDataFolder.target = self
         menu.addItem(openDataFolder)
@@ -3529,8 +3563,16 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let settingsMenu = NSMenu()
         settingsMenu.addItem(microphoneItem)
 
-        retainSuccessfulAudioItem.target = self
-        settingsMenu.addItem(retainSuccessfulAudioItem)
+        let recoveryRetentionMenu = NSMenu()
+        for choice in RecoveryRetentionPreference.choices {
+            let item = NSMenuItem(title: choice.title, action: #selector(selectRecoveryRetention), keyEquivalent: "")
+            item.target = self
+            item.representedObject = choice.hours
+            recoveryRetentionMenu.addItem(item)
+            recoveryRetentionItems[choice.hours] = item
+        }
+        recoveryRetentionItem.submenu = recoveryRetentionMenu
+        settingsMenu.addItem(recoveryRetentionItem)
 
         let diagnosticsItem = NSMenuItem(title: "Diagnostics", action: nil, keyEquivalent: "")
         let diagnosticsMenu = NSMenu()
@@ -3557,7 +3599,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         statusItem.menu = menu
         updateStartAtLoginState()
-        updateSuccessfulAudioRetentionState()
+        updateRecoveryRetentionState()
         updateTTSLanguageState()
         applyPermanentTranscriberState(permanentTranscriberStatus)
         updatePermanentTranscriberModeState()
@@ -3575,6 +3617,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
         applyPermanentTranscriberState(permanentTranscriberStatus)
         updatePermanentTranscriberModeState()
+        updateRecoveryRetentionState()
         refreshPermanentTranscriberState()
         refreshPermanentTranscriberDevices()
     }
@@ -3599,11 +3642,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         updateStartAtLoginState()
     }
 
-    @objc private func toggleSuccessfulAudioRetention() {
-        let enabled = !AudioRetentionPreference.retainSuccessfulDictations
-        AudioRetentionPreference.setRetainSuccessfulDictations(enabled)
-        updateSuccessfulAudioRetentionState()
-        logEvent("successful audio retention enabled=\(enabled)")
+    @objc private func selectRecoveryRetention(_ sender: NSMenuItem) {
+        guard let hours = sender.representedObject as? Int else { return }
+        RecoveryRetentionPreference.setHours(hours)
+        updateRecoveryRetentionState()
+        logEvent("dictation recovery retention selected hours=\(hours)")
     }
 
     @objc private func stopASRWorker() {
@@ -3761,6 +3804,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         NSWorkspace.shared.open(permanentTranscriberDataRoot)
     }
 
+    @objc private func openRecoveryFolder() {
+        try? FileManager.default.createDirectory(at: dictationRecoveryDir, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(dictationRecoveryDir)
+    }
+
     @objc private func openDataFolder() {
         try? FileManager.default.createDirectory(at: dataRoot, withIntermediateDirectories: true)
         NSWorkspace.shared.open(dataRoot)
@@ -3845,8 +3893,16 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         startAtLoginItem.state = isStartAtLoginEnabled() ? .on : .off
     }
 
-    private func updateSuccessfulAudioRetentionState() {
-        retainSuccessfulAudioItem.state = AudioRetentionPreference.retainSuccessfulDictations ? .on : .off
+    private func updateRecoveryRetentionState() {
+        let hours = RecoveryRetentionPreference.hours
+        for (choiceHours, item) in recoveryRetentionItems {
+            item.state = choiceHours == hours ? .on : .off
+        }
+        if let choice = RecoveryRetentionPreference.choices.first(where: { $0.hours == hours }) {
+            recoveryRetentionItem.title = "Recovery Audio Retention — \(choice.title)"
+        } else {
+            recoveryRetentionItem.title = "Recovery Audio Retention — \(hours) Hours"
+        }
     }
 
     private func updateTTSLanguageState() {
@@ -3922,9 +3978,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     private func rebuildRecentMenus() {
+        let recoveryDictations = recursiveTranscriptRecords(in: dictationRecoveryDir)
+        let legacyDictations = transcriptRecords(in: dictationTranscriptsDir)
+        let recentDictations = (recoveryDictations + legacyDictations)
+            .sorted { $0.modifiedAt > $1.modifiedAt }
+            .prefix(5)
         recentDictationsItem.submenu = recentMenu(
             emptyTitle: "No recent dictations",
-            records: transcriptRecords(in: dictationTranscriptsDir)
+            records: Array(recentDictations)
         )
         recentPermanentRelaxedItem.submenu = recentMenu(
             emptyTitle: "No recent canonical transcripts",
@@ -4156,12 +4217,35 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 }
 
+private let recoverySessionMarkerName = ".interactive-dictation-recovery"
+
+private func createRecoverySessionDirectory(
+    root: URL,
+    sessionID: String,
+    startedAt: Date = Date()
+) throws -> URL {
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss-SSS"
+    let directory = root.appendingPathComponent(
+        "\(formatter.string(from: startedAt))-session-\(sessionID)",
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try Data().write(to: directory.appendingPathComponent(recoverySessionMarkerName))
+    try Data().write(to: directory.appendingPathComponent("transcript.txt"), options: .atomic)
+    return directory
+}
+
 private final class InteractiveDictationSession: @unchecked Sendable {
-    let id = UUID().uuidString
+    let id: String
+    let recoveryDirectory: URL
+    let transcriptURL: URL
     let prepareGroup = DispatchGroup()
 
     private let lock = NSLock()
     private var chunkIndex = 0
+    private var nextRecordingChunkIndex = 1
     private var pendingChunks = 0
     private var finishRequested = false
     private var completionClaimed = false
@@ -4169,8 +4253,22 @@ private final class InteractiveDictationSession: @unchecked Sendable {
     private var chunkTexts: [Int: String] = [:]
     private var nextCommitIndex = 1
 
-    init() {
+    init(recoveryRoot: URL = dictationRecoveryDir) throws {
+        id = UUID().uuidString
+        recoveryDirectory = try createRecoverySessionDirectory(root: recoveryRoot, sessionID: id)
+        transcriptURL = recoveryDirectory.appendingPathComponent("transcript.txt")
         prepareGroup.enter()
+    }
+
+    var initialAudioFilename: String {
+        "chunk-001.wav"
+    }
+
+    func nextAudioFilename() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        nextRecordingChunkIndex += 1
+        return String(format: "chunk-%03d.wav", nextRecordingChunkIndex)
     }
 
     func markPrepared() {
@@ -4193,7 +4291,6 @@ private final class InteractiveDictationSession: @unchecked Sendable {
 
     func completeChunk(index: Int, text: String) -> String? {
         lock.lock()
-        defer { lock.unlock() }
         chunkTexts[index] = text
         while let nextText = chunkTexts[nextCommitIndex] {
             if !nextText.isEmpty {
@@ -4204,7 +4301,16 @@ private final class InteractiveDictationSession: @unchecked Sendable {
             nextCommitIndex += 1
         }
         pendingChunks = max(0, pendingChunks - 1)
-        return claimCompletedTextIfReadyLocked()
+        let transcript = committedText
+        let completedText = claimCompletedTextIfReadyLocked()
+        lock.unlock()
+
+        do {
+            try Data(transcript.utf8).write(to: transcriptURL, options: .atomic)
+        } catch {
+            fputs("recovery transcript write failed session=\(id) path=\(transcriptURL.path) error=\(error)\n", stderr)
+        }
+        return completedText
     }
 
     func claimCompletedTextIfReady() -> String? {
@@ -4222,7 +4328,7 @@ private final class InteractiveDictationSession: @unchecked Sendable {
     }
 }
 
-private enum DictationHotkeyPhase: Equatable {
+private enum DictationHotkeyPhase: String, Equatable {
     case idle
     case held
     case lockedWhileHeld
@@ -4230,10 +4336,37 @@ private enum DictationHotkeyPhase: Equatable {
     case endedAwaitingRelease
 }
 
-private enum DictationHotkeyAction: Equatable {
+private enum DictationHotkeyAction: String, Equatable {
     case startRecording
     case stopRecording
     case confirmLock
+}
+
+private enum RecordingStopReason: String {
+    case chordReleased
+    case lockedChordPressed
+    case chunkRotationFailed
+    case testRequest
+}
+
+private struct ModifierEventEvidence: Sendable {
+    let id: UInt64
+    let eventTimestamp: UInt64
+    let occurredAt: Date
+    let callbackUptimeNanoseconds: UInt64
+    let keyCode: Int64
+    let rawFlags: UInt64
+    let sourcePID: Int64
+    let sourceStateID: Int64
+    let hidFlags: UInt64
+    let combinedFlags: UInt64
+    let hidLeftShiftDown: Bool
+    let hidRightShiftDown: Bool
+    let hidLeftControlDown: Bool
+    let hidRightControlDown: Bool
+    let hasShift: Bool
+    let hasControl: Bool
+    let hasOption: Bool
 }
 
 private struct DictationHotkeyStateMachine {
@@ -4290,6 +4423,8 @@ final class DictationAgent {
     private var isRecording = false
     private var activeSession: InteractiveDictationSession?
     private var processingSessionIDs: Set<String> = []
+    private var protectedRecoveryDirectories: Set<String> = []
+    private var nextModifierEventID: UInt64 = 0
     private var chunkTimer: DispatchSourceTimer?
     private var eventTapMonitor: DispatchSourceTimer?
     private var accessibilityPermissionMonitor: DispatchSourceTimer?
@@ -4369,6 +4504,13 @@ final class DictationAgent {
             return
         }
 
+        DispatchQueue.global(qos: .utility).async {
+            pruneRecoverySessions(
+                root: dictationRecoveryDir,
+                retentionHours: RecoveryRetentionPreference.hours,
+                excludingPaths: []
+            )
+        }
         logEvent("MacDictationAgent running. Hold Control+Shift to dictate.")
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
@@ -4563,25 +4705,53 @@ final class DictationAgent {
         defer { try? FileManager.default.removeItem(at: root) }
 
         do {
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            let source = root.appendingPathComponent("source.wav")
-            try Data("audio".utf8).write(to: source)
-            let saved = try preserveAudio(source, in: root.appendingPathComponent("saved"), label: "success")
-            guard FileManager.default.fileExists(atPath: source.path), FileManager.default.fileExists(atPath: saved.path) else {
-                throw CocoaError(.fileNoSuchFile)
+            let recoveryRoot = root.appendingPathComponent("recovery")
+            let quarantine = root.appendingPathComponent("test-trash")
+            try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+            let expired = try createRecoverySessionDirectory(root: recoveryRoot, sessionID: "expired")
+            let active = try createRecoverySessionDirectory(root: recoveryRoot, sessionID: "active")
+            let fresh = try createRecoverySessionDirectory(root: recoveryRoot, sessionID: "fresh")
+            let legacy = recoveryRoot.appendingPathComponent("legacy-diagnostic-artifacts")
+            try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+            let transcriptSession = try InteractiveDictationSession(recoveryRoot: recoveryRoot)
+            let firstIndex = transcriptSession.registerChunk()
+            let secondIndex = transcriptSession.registerChunk()
+            _ = transcriptSession.completeChunk(index: secondIndex, text: "world")
+            guard try String(contentsOf: transcriptSession.transcriptURL, encoding: .utf8).isEmpty else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            _ = transcriptSession.completeChunk(index: firstIndex, text: "hello")
+            guard try String(contentsOf: transcriptSession.transcriptURL, encoding: .utf8) == "hello world" else {
+                throw CocoaError(.fileReadCorruptFile)
             }
 
-            let blockedDirectory = root.appendingPathComponent("blocked")
-            try Data("not a directory".utf8).write(to: blockedDirectory)
-            do {
-                _ = try preserveAudio(source, in: blockedDirectory, label: "failure")
-                fputs("audio-retention-test failed: expected preservation error\n", stderr)
-                exit(1)
-            } catch {
-                guard FileManager.default.fileExists(atPath: source.path) else {
-                    fputs("audio-retention-test failed: source was lost after preservation error\n", stderr)
-                    exit(1)
+            let audio = active.appendingPathComponent("chunk-001.wav")
+            try Data("recoverable audio".utf8).write(to: audio)
+            let oldDate = Date().addingTimeInterval(-48 * 3600)
+            for directory in [expired, active, legacy] {
+                try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: directory.path)
+            }
+
+            pruneRecoverySessions(
+                root: recoveryRoot,
+                retentionHours: 24,
+                excludingPaths: [active.standardizedFileURL.path],
+                moveToTrash: { url in
+                    try FileManager.default.moveItem(
+                        at: url,
+                        to: quarantine.appendingPathComponent(url.lastPathComponent)
+                    )
                 }
+            )
+
+            guard !FileManager.default.fileExists(atPath: expired.path) else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            guard FileManager.default.fileExists(atPath: active.path),
+                  FileManager.default.fileExists(atPath: audio.path),
+                  FileManager.default.fileExists(atPath: fresh.path),
+                  FileManager.default.fileExists(atPath: legacy.path) else {
+                throw CocoaError(.fileNoSuchFile)
             }
             print("audio-retention-test passed")
         } catch {
@@ -4602,7 +4772,7 @@ final class DictationAgent {
         }
         Thread.sleep(forTimeInterval: seconds)
         controlQueue.sync {
-            stopRecordingAndPaste()
+            stopRecordingAndPaste(reason: .testRequest)
         }
         let result = group.wait(timeout: .now() + 180)
         logEvent("flow-test completion result=\(result == .success ? "success" : "timeout")")
@@ -4625,7 +4795,7 @@ final class DictationAgent {
             }
             Thread.sleep(forTimeInterval: seconds)
             controlQueue.sync {
-                stopRecordingAndPaste()
+                stopRecordingAndPaste(reason: .testRequest)
             }
             logEvent("rapid-flow-test recording completed run=\(run)")
         }
@@ -4798,14 +4968,24 @@ final class DictationAgent {
         }
     }
 
-    private func startRecording() {
+    private func startRecording(triggerEventID: UInt64? = nil) {
         guard !isRecording else { return }
-        logEvent("recording start requested")
-        let session = InteractiveDictationSession()
+        var failedRecoveryDirectory: URL?
         do {
-            logEvent("audio recorder start begin")
-            _ = try recorder.start()
-            logEvent("audio recorder start end")
+            let session = try InteractiveDictationSession()
+            failedRecoveryDirectory = session.recoveryDirectory
+            protectRecoveryDirectory(session.recoveryDirectory)
+            let trigger = triggerEventID.map(String.init) ?? "none"
+            logEvent(
+                "recording start requested session=\(session.id) trigger_event=\(trigger) "
+                    + "recovery=\(session.recoveryDirectory.path)"
+            )
+            logEvent("audio recorder start begin session=\(session.id)")
+            _ = try recorder.start(
+                outputDirectory: session.recoveryDirectory,
+                filename: session.initialAudioFilename
+            )
+            logEvent("audio recorder start end session=\(session.id)")
             activeSession = session
             isRecording = true
             updateInteractiveRecordingIndicator(true)
@@ -4814,13 +4994,19 @@ final class DictationAgent {
             startChunkTimer()
             logEvent("recording started session=\(session.id)")
         } catch {
+            if let failedRecoveryDirectory {
+                unprotectRecoveryDirectory(failedRecoveryDirectory)
+            }
             activeSession = nil
             isRecording = false
             hotkeyState.recordingEnded()
             updateInteractiveRecordingIndicator(false)
             playErrorSound()
             dictationASR.scheduleShutdown()
-            fputs("recording failed: \(error)\n", stderr)
+            fputs(
+                "recording failed; recovery preserved path=\(failedRecoveryDirectory?.path ?? "unavailable") error=\(error)\n",
+                stderr
+            )
         }
     }
 
@@ -4834,34 +5020,47 @@ final class DictationAgent {
         }
     }
 
-    private func stopRecordingAndPaste() {
-        guard isRecording, let session = activeSession else { return }
+    private func stopRecordingAndPaste(
+        reason: RecordingStopReason,
+        triggerEventID: UInt64? = nil
+    ) {
+        guard isRecording, let session = activeSession else {
+            logEvent("recording stop ignored reason=\(reason.rawValue) session=none")
+            return
+        }
         isRecording = false
         activeSession = nil
         hotkeyState.recordingEnded()
         updateInteractiveRecordingIndicator(false)
         setSessionProcessing(session, active: true)
         session.requestFinish()
-        logEvent("recording stop requested")
+        let trigger = triggerEventID.map(String.init) ?? "none"
+        logEvent("recording stop requested session=\(session.id) reason=\(reason.rawValue) trigger_event=\(trigger)")
         chunkTimer?.cancel()
         chunkTimer = nil
         let audioURL: URL
         do {
-            guard let stoppedURL = try recorder.stop(postrollSeconds: finalChunkPostrollSeconds) else {
-                logEvent("recording stop produced no audio")
+            guard let stoppedURL = try recorder.stop(
+                postrollSeconds: finalChunkPostrollSeconds,
+                context: "stop session=\(session.id) reason=\(reason.rawValue)"
+            ) else {
+                logEvent("recording stop outcome=no-audio session=\(session.id) reason=\(reason.rawValue)")
                 finishSessionIfReady(session)
                 dictationASR.scheduleShutdown()
                 return
             }
             audioURL = stoppedURL
         } catch {
-            logEvent("recording stop failed error=\(error)")
+            logEvent(
+                "recording stop outcome=failed session=\(session.id) reason=\(reason.rawValue) "
+                    + "recovery=\(session.recoveryDirectory.path) error=\(error)"
+            )
             playErrorSound()
             finishSessionIfReady(session)
             dictationASR.scheduleShutdown()
             return
         }
-        logEvent("recording stopped path=\(audioURL.path)")
+        logEvent("recording stopped session=\(session.id) reason=\(reason.rawValue) path=\(audioURL.path)")
         playStopSound()
         processChunk(audioURL, session: session, final: true)
     }
@@ -4870,20 +5069,22 @@ final class DictationAgent {
         let timer = DispatchSource.makeTimerSource(queue: controlQueue)
         timer.schedule(deadline: .now() + chunkSeconds, repeating: chunkSeconds)
         timer.setEventHandler { [weak self] in
-            guard let self, self.isRecording else { return }
+            guard let self, self.isRecording, let session = self.activeSession else { return }
             do {
-                if let url = try self.recorder.rotate() {
-                    guard let session = self.activeSession else {
-                        logEvent("chunk rotation produced audio without an active session path=\(url.path)")
-                        keepDebugAudio(url, label: "orphaned-rotation", maxFiles: 12)
-                        return
-                    }
+                if let url = try self.recorder.rotate(
+                    outputDirectory: session.recoveryDirectory,
+                    filename: session.nextAudioFilename(),
+                    context: "rotation session=\(session.id)"
+                ) {
                     self.processChunk(url, session: session, final: false)
                 }
             } catch {
                 playErrorSound()
-                logEvent("chunk file rotation failed; stopping continuous capture error=\(error)")
-                self.stopRecordingAndPaste()
+                logEvent(
+                    "chunk rotation outcome=failed session=\(session.id) "
+                        + "recovery=\(session.recoveryDirectory.path) error=\(error)"
+                )
+                self.stopRecordingAndPaste(reason: .chunkRotationFailed)
             }
         }
         chunkTimer = timer
@@ -4897,60 +5098,39 @@ final class DictationAgent {
     ) {
         let index = session.registerChunk()
         let sessionID = session.id
+        logEvent("chunk queued session=\(sessionID) chunk=\(index) final=\(final) path=\(audioURL.path)")
         transcriptionQueue.async {
-            let isSuspiciouslyQuiet: Bool
             if let stats = wavStats(audioURL) {
-                isSuspiciouslyQuiet = stats.isSuspiciouslyQuiet
-                logEvent("chunk \(index) audio \(String(format: "%.2f", stats.durationSeconds))s peak=\(stats.peak) rms=\(String(format: "%.1f", stats.rms)) final=\(final)")
-                if isSuspiciouslyQuiet {
-                    logEvent("chunk \(index) suspiciously quiet; audio will be retained for diagnosis")
-                }
+                logEvent(
+                    "chunk audio session=\(sessionID) chunk=\(index) duration=\(String(format: "%.2f", stats.durationSeconds))s "
+                        + "peak=\(stats.peak) rms=\(String(format: "%.1f", stats.rms)) quiet=\(stats.isSuspiciouslyQuiet) final=\(final)"
+                )
             } else {
-                isSuspiciouslyQuiet = false
+                logEvent("chunk audio session=\(sessionID) chunk=\(index) stats=unavailable final=\(final)")
             }
-            var canDeleteSource = true
             var completedText = ""
             do {
-                logEvent("chunk \(index) wait ASR prepare begin")
+                logEvent("chunk ASR wait begin session=\(sessionID) chunk=\(index)")
                 let waitResult = session.prepareGroup.wait(timeout: .now() + fluidSessionPrepareTimeoutSeconds)
-                logEvent("chunk \(index) wait ASR prepare end result=\(waitResult == .success ? "success" : "timeout")")
+                logEvent("chunk ASR wait end session=\(sessionID) chunk=\(index) result=\(waitResult == .success ? "success" : "timeout")")
                 let response = try self.dictationASR.transcribe(
                     sessionID: sessionID,
                     chunkIndex: index,
                     audioURL: audioURL,
                     final: final
                 )
-                let text = sanitize(response.text ?? "")
-                completedText = text
-                logEvent("chunk \(index) transcribed chars=\(text.count) speedup=\(response.speedup ?? 0)")
-                if isSuspiciouslyQuiet || AudioRetentionPreference.retainSuccessfulDictations {
-                    let directory = isSuspiciouslyQuiet ? retainedAudioDir : successfulAudioDir
-                    let label = isSuspiciouslyQuiet ? "quiet-session-\(sessionID)-chunk-\(index)" : "session-\(sessionID)-chunk-\(index)"
-                    do {
-                        let saved = try preserveAudio(audioURL, in: directory, label: label)
-                        logEvent("audio retained path=\(saved.path)")
-                    } catch {
-                        canDeleteSource = false
-                        fputs("audio preservation failed; original left at \(audioURL.path): \(error)\n", stderr)
-                    }
-                }
+                completedText = sanitize(response.text ?? "")
+                let outcome = completedText.isEmpty ? "empty" : "transcribed"
+                logEvent(
+                    "chunk outcome=\(outcome) session=\(sessionID) chunk=\(index) chars=\(completedText.count) "
+                        + "speedup=\(response.speedup ?? 0) recovery=\(audioURL.path)"
+                )
             } catch {
                 playErrorSound()
-                do {
-                    let saved = try preserveAudio(
-                        audioURL,
-                        in: retainedAudioDir,
-                        label: "failed-session-\(sessionID)-chunk-\(index)"
-                    )
-                    logEvent("failed audio retained path=\(saved.path)")
-                } catch {
-                    canDeleteSource = false
-                    fputs("failed audio preservation failed; original left at \(audioURL.path): \(error)\n", stderr)
-                }
-                fputs("transcription failed: \(error)\n", stderr)
-            }
-            if canDeleteSource {
-                try? FileManager.default.removeItem(at: audioURL)
+                fputs(
+                    "chunk outcome=transcription-failed session=\(sessionID) chunk=\(index) original=\(audioURL.path) error=\(error)\n",
+                    stderr
+                )
             }
             if let text = session.completeChunk(index: index, text: completedText) {
                 self.finishSession(session, text: text)
@@ -4967,23 +5147,36 @@ final class DictationAgent {
     private func finishSession(_ session: InteractiveDictationSession, text rawText: String) {
         let text = sanitize(rawText)
         setSessionProcessing(session, active: false)
+        unprotectRecoveryDirectory(session.recoveryDirectory)
+        pruneRecoveryAfterSession()
         defer { dictationASR.scheduleShutdown() }
         defer {
             testCompletionGroup?.leave()
         }
         if text.isEmpty {
             playErrorSound()
-            logEvent("paste skipped empty text")
+            logEvent(
+                "session finalized outcome=empty session=\(session.id) transcript=\(session.transcriptURL.path) "
+                    + "recovery=\(session.recoveryDirectory.path)"
+            )
             return
         }
         if suppressPasteForTest {
-            logEvent("paste suppressed for test chars=\(text.count)")
+            logEvent("session finalized outcome=test-suppressed session=\(session.id) chars=\(text.count) recovery=\(session.recoveryDirectory.path)")
             return
         }
-        _ = saveTranscript(text, in: dictationTranscriptsDir, prefix: "dictation")
-        copyToClipboard(text)
-        pasteClipboard()
-        logEvent("pasted \(text.count) chars")
+        let targetApplication = NSWorkspace.shared.frontmostApplication
+        let targetPID = targetApplication?.processIdentifier ?? -1
+        let targetBundle = targetApplication?.bundleIdentifier ?? "unknown"
+        let physicalFlags = CGEventSource.flagsState(.combinedSessionState).rawValue
+        let clipboardWritten = copyToClipboard(text)
+        let pasteEventsPosted = pasteClipboard()
+        logEvent(
+            "delivery paste requested session=\(session.id) target_pid=\(targetPID) target_bundle=\(targetBundle) "
+                + "clipboard_write=\(clipboardWritten ? "success" : "failed") event_posted=\(pasteEventsPosted) "
+                + "physical_flags=0x\(String(physicalFlags, radix: 16))"
+        )
+        logEvent("session finalized outcome=paste-requested session=\(session.id) chars=\(text.count) transcript=\(session.transcriptURL.path)")
     }
 
     private func setSessionProcessing(_ session: InteractiveDictationSession, active: Bool) {
@@ -4996,6 +5189,31 @@ final class DictationAgent {
         let hasProcessingSessions = !processingSessionIDs.isEmpty
         stateLock.unlock()
         updateInteractiveProcessingIndicator(hasProcessingSessions)
+    }
+
+    private func protectRecoveryDirectory(_ directory: URL) {
+        stateLock.lock()
+        protectedRecoveryDirectories.insert(directory.standardizedFileURL.path)
+        stateLock.unlock()
+    }
+
+    private func unprotectRecoveryDirectory(_ directory: URL) {
+        stateLock.lock()
+        protectedRecoveryDirectories.remove(directory.standardizedFileURL.path)
+        stateLock.unlock()
+    }
+
+    private func pruneRecoveryAfterSession() {
+        stateLock.lock()
+        let excluded = protectedRecoveryDirectories
+        stateLock.unlock()
+        DispatchQueue.global(qos: .utility).async {
+            pruneRecoverySessions(
+                root: dictationRecoveryDir,
+                retentionHours: RecoveryRetentionPreference.hours,
+                excludingPaths: excluded
+            )
+        }
     }
 
     private func updateInteractiveRecordingIndicator(_ active: Bool) {
@@ -5032,7 +5250,7 @@ final class DictationAgent {
                 guard type == .flagsChanged else {
                     return Unmanaged.passUnretained(event)
                 }
-                agent.handleFlags(event.flags)
+                agent.handleFlags(event)
                 return Unmanaged.passUnretained(event)
             },
             userInfo: Unmanaged.passUnretained(self).toOpaque()
@@ -5101,54 +5319,148 @@ final class DictationAgent {
         CGEvent.tapEnable(tap: tap, enable: true)
     }
 
-    private func handleFlags(_ flags: CGEventFlags) {
-        let hasShift = flags.contains(.maskShift)
-        let hasControl = flags.contains(.maskControl)
-        let hasOption = flags.contains(.maskAlternate)
-        let isPressed = hasShift && hasControl
+    private func handleFlags(_ event: CGEvent) {
+        nextModifierEventID += 1
+        let callbackUptime = DispatchTime.now().uptimeNanoseconds
+        let eventTimestamp = event.timestamp
+        let eventAge = callbackUptime >= eventTimestamp ? callbackUptime - eventTimestamp : 0
+        let flags = event.flags
+        let evidence = ModifierEventEvidence(
+            id: nextModifierEventID,
+            eventTimestamp: eventTimestamp,
+            occurredAt: Date().addingTimeInterval(-Double(eventAge) / 1_000_000_000),
+            callbackUptimeNanoseconds: callbackUptime,
+            keyCode: event.getIntegerValueField(.keyboardEventKeycode),
+            rawFlags: flags.rawValue,
+            sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID),
+            sourceStateID: event.getIntegerValueField(.eventSourceStateID),
+            hidFlags: CGEventSource.flagsState(.hidSystemState).rawValue,
+            combinedFlags: CGEventSource.flagsState(.combinedSessionState).rawValue,
+            hidLeftShiftDown: CGEventSource.keyState(.hidSystemState, key: 56),
+            hidRightShiftDown: CGEventSource.keyState(.hidSystemState, key: 60),
+            hidLeftControlDown: CGEventSource.keyState(.hidSystemState, key: 59),
+            hidRightControlDown: CGEventSource.keyState(.hidSystemState, key: 62),
+            hasShift: flags.contains(.maskShift),
+            hasControl: flags.contains(.maskControl),
+            hasOption: flags.contains(.maskAlternate)
+        )
+        logEvent(
+            "modifier event received event=\(evidence.id) occurred_at=\(isoTimestamp(evidence.occurredAt)) "
+                + "event_uptime_ns=\(evidence.eventTimestamp) callback_delay_ms=\(String(format: "%.3f", Double(eventAge) / 1_000_000)) "
+                + "keycode=\(evidence.keyCode) raw_flags=0x\(String(evidence.rawFlags, radix: 16)) "
+                + "source_pid=\(evidence.sourcePID) source_state=\(evidence.sourceStateID) "
+                + "hid_flags=0x\(String(evidence.hidFlags, radix: 16)) combined_flags=0x\(String(evidence.combinedFlags, radix: 16)) "
+                + "hid_keys=shift_l:\(evidence.hidLeftShiftDown),shift_r:\(evidence.hidRightShiftDown),"
+                + "control_l:\(evidence.hidLeftControlDown),control_r:\(evidence.hidRightControlDown)"
+        )
         controlQueue.async { [weak self] in
-            self?.handleHotkeyModifiers(
-                isPressed: isPressed,
-                lockRequested: isPressed && hasOption
-            )
+            self?.handleHotkeyModifiers(evidence)
         }
     }
 
-    private func handleHotkeyModifiers(isPressed: Bool, lockRequested: Bool) {
+    private func handleHotkeyModifiers(_ evidence: ModifierEventEvidence) {
+        let handlingUptime = DispatchTime.now().uptimeNanoseconds
+        let queueDelay = handlingUptime >= evidence.callbackUptimeNanoseconds
+            ? handlingUptime - evidence.callbackUptimeNanoseconds
+            : 0
+        let isPressed = evidence.hasShift && evidence.hasControl
         let previousPhase = hotkeyState.phase
+        let sessionID = activeSession?.id ?? "none"
         let action = hotkeyState.chordChanged(isPressed: isPressed)
-        if hotkeyState.phase != previousPhase {
-            switch action {
-            case .startRecording:
-                logEvent("hotkey down")
-                startRecording()
-            case .stopRecording:
-                logEvent(previousPhase == .lockedAfterRelease ? "hotkey down; stopping locked recording" : "hotkey up")
-                stopRecordingAndPaste()
-            case .confirmLock:
-                break
-            case nil:
-                if hotkeyState.phase == .lockedAfterRelease {
-                    logEvent("hotkey released; recording remains locked")
-                }
+        let actionName = action?.rawValue ?? "none"
+        let stopReason: RecordingStopReason? = action == .stopRecording
+            ? (previousPhase == .lockedAfterRelease ? .lockedChordPressed : .chordReleased)
+            : nil
+        logEvent(
+            "modifier event handled event=\(evidence.id) queue_delay_ms=\(String(format: "%.3f", Double(queueDelay) / 1_000_000)) "
+                + "keycode=\(evidence.keyCode) raw_flags=0x\(String(evidence.rawFlags, radix: 16)) "
+                + "shift=\(evidence.hasShift) control=\(evidence.hasControl) option=\(evidence.hasOption) "
+                + "phase=\(previousPhase.rawValue)->\(hotkeyState.phase.rawValue) action=\(actionName) "
+                + "stop_reason=\(stopReason?.rawValue ?? "none") session=\(sessionID)"
+        )
+
+        switch action {
+        case .startRecording:
+            startRecording(triggerEventID: evidence.id)
+        case .stopRecording:
+            if let stopReason {
+                stopRecordingAndPaste(reason: stopReason, triggerEventID: evidence.id)
+            } else {
+                logEvent("hotkey stop missing reason event=\(evidence.id) session=\(sessionID)")
             }
+        case .confirmLock, nil:
+            break
         }
-        if lockRequested {
-            lockCurrentRecording()
+        if isPressed && evidence.hasOption {
+            lockCurrentRecording(triggerEventID: evidence.id)
         }
     }
 
-    private func lockCurrentRecording() {
+    private func lockCurrentRecording(triggerEventID: UInt64) {
+        let previousPhase = hotkeyState.phase
         guard isRecording, hotkeyState.requestLock() == .confirmLock else {
-            logEvent("dictation lock ignored; no held recording")
+            logEvent(
+                "hotkey action=lock-ignored event=\(triggerEventID) phase=\(previousPhase.rawValue) "
+                    + "session=\(activeSession?.id ?? "none")"
+            )
             return
         }
         playLockSound()
-        logEvent("dictation locked with Option; release modifiers and press Control+Shift to stop")
+        logEvent(
+            "hotkey action=confirmLock event=\(triggerEventID) phase=\(previousPhase.rawValue)->\(hotkeyState.phase.rawValue) "
+                + "session=\(activeSession?.id ?? "none")"
+        )
     }
 }
 
 extension DictationAgent: @unchecked Sendable {}
+
+func pruneRecoverySessions(
+    root: URL,
+    retentionHours: Int,
+    excludingPaths: Set<String>,
+    now: Date = Date(),
+    moveToTrash: ((URL) throws -> Void)? = nil
+) {
+    guard retentionHours > 0 else {
+        logEvent("dictation recovery pruning skipped retention=forever")
+        return
+    }
+    let keys: Set<URLResourceKey> = [.isDirectoryKey, .contentModificationDateKey, .creationDateKey]
+    guard let entries = try? FileManager.default.contentsOfDirectory(
+        at: root,
+        includingPropertiesForKeys: Array(keys),
+        options: [.skipsHiddenFiles]
+    ) else {
+        return
+    }
+    let cutoff = now.addingTimeInterval(-Double(retentionHours) * 3600)
+    var trashedCount = 0
+    for entry in entries {
+        guard !excludingPaths.contains(entry.standardizedFileURL.path) else { continue }
+        guard FileManager.default.fileExists(
+            atPath: entry.appendingPathComponent(recoverySessionMarkerName).path
+        ) else { continue }
+        guard let values = try? entry.resourceValues(forKeys: keys), values.isDirectory == true else {
+            continue
+        }
+        let sessionDate = values.contentModificationDate ?? values.creationDate ?? now
+        guard sessionDate < cutoff else { continue }
+        do {
+            if let moveToTrash {
+                try moveToTrash(entry)
+            } else {
+                var resultingURL: NSURL?
+                try FileManager.default.trashItem(at: entry, resultingItemURL: &resultingURL)
+            }
+            trashedCount += 1
+            logEvent("dictation recovery expired action=trashed path=\(entry.path)")
+        } catch {
+            fputs("dictation recovery expiry failed; original preserved path=\(entry.path) error=\(error)\n", stderr)
+        }
+    }
+    logEvent("dictation recovery pruning complete retention_hours=\(retentionHours) trashed=\(trashedCount)")
+}
 
 func keepDebugAudio(_ audioURL: URL, label: String, maxFiles: Int) {
     do {
@@ -5183,16 +5495,6 @@ func pruneDebugAudio(maxFiles: Int) {
     for file in audioFiles.dropFirst(maxFiles) {
         try? FileManager.default.removeItem(at: file)
     }
-}
-
-func preserveAudio(_ audioURL: URL, in directory: URL, label: String) throws -> URL {
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let timestamp = String(Int(Date().timeIntervalSince1970 * 1000))
-    let safeLabel = label.replacingOccurrences(of: "[^A-Za-z0-9._-]+", with: "-", options: .regularExpression)
-    let ext = audioURL.pathExtension.isEmpty ? "audio" : audioURL.pathExtension
-    let destination = directory.appendingPathComponent("\(timestamp)-\(UUID().uuidString)-\(safeLabel).\(ext)")
-    try FileManager.default.copyItem(at: audioURL, to: destination)
-    return destination
 }
 
 func sanitize(_ text: String) -> String {
@@ -5300,20 +5602,27 @@ func audioFileStats(_ url: URL) -> WavStats? {
     )
 }
 
-func copyToClipboard(_ text: String) {
+@discardableResult
+func copyToClipboard(_ text: String) -> Bool {
     let pasteboard = NSPasteboard.general
     pasteboard.clearContents()
-    pasteboard.setString(text, forType: .string)
+    return pasteboard.setString(text, forType: .string)
 }
 
-func pasteClipboard() {
+@discardableResult
+func pasteClipboard() -> Bool {
     let source = CGEventSource(stateID: .hidSystemState)
-    let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true)
-    let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
-    keyDown?.flags = .maskCommand
-    keyUp?.flags = .maskCommand
-    keyDown?.post(tap: .cghidEventTap)
-    keyUp?.post(tap: .cghidEventTap)
+    guard
+        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false)
+    else {
+        return false
+    }
+    keyDown.flags = .maskCommand
+    keyUp.flags = .maskCommand
+    keyDown.post(tap: .cghidEventTap)
+    keyUp.post(tap: .cghidEventTap)
+    return true
 }
 
 func playStartSound() {
