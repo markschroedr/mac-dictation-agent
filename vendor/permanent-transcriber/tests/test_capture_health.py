@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
@@ -14,8 +15,9 @@ from permanent_transcriber.capture_health import (
     write_capture_health,
 )
 from permanent_transcriber.cli import ensure_capture_launch_allowed, wait_for_capture_health, wait_for_worker_ready
-from permanent_transcriber.config import default_paths
+from permanent_transcriber.config import CaptureConfig, default_paths
 from permanent_transcriber.process_state import read_live_pid, write_process_state
+from permanent_transcriber.vad import VadSegmenter
 from permanent_transcriber.worker import TranscriptionWorker
 
 
@@ -36,6 +38,23 @@ class CaptureSignalMonitorTests(unittest.TestCase):
         monitor.observe(b"\x00\x00\x01\x00", now=12.5)
         monitor.check(now=15.4)
         self.assertTrue(monitor.has_signal)
+
+
+class VadSegmenterTests(unittest.TestCase):
+    def test_continuous_speech_is_rotated_at_maximum_segment_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = default_paths(Path(temporary))
+            paths.ensure()
+            config = CaptureConfig(frame_ms=30, min_segment_ms=30, max_segment_ms=90)
+            segmenter = VadSegmenter(config, paths, AlwaysSpeechVad())
+            started_at = datetime.now(UTC)
+
+            self.assertIsNone(segmenter.process_frame(bytes(config.frame_bytes), started_at))
+            self.assertIsNone(segmenter.process_frame(bytes(config.frame_bytes), started_at))
+            event = segmenter.process_frame(bytes(config.frame_bytes), started_at)
+
+            self.assertIsNotNone(event)
+            self.assertEqual(event.duration_ms, 90)
 
 
 class CaptureHealthFileTests(unittest.TestCase):
@@ -136,6 +155,11 @@ class CaptureLaunchTests(unittest.TestCase):
     def test_gui_capture_is_allowed(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             ensure_capture_launch_allowed()
+
+
+class AlwaysSpeechVad:
+    def is_speech(self, frame: bytes, sample_rate_hz: int) -> bool:
+        return True
 
 
 class FakeProcess:

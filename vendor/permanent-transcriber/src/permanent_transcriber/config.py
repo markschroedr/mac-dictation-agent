@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -14,6 +14,7 @@ class CaptureConfig:
     preroll_ms: int = 300
     hangover_ms: int = 900
     min_segment_ms: int = 800
+    max_segment_ms: int = 4 * 60 * 1000
     input_device: str | int | None = None
     queue_max_frames: int = 256
     opus_bitrate: str = "48k"
@@ -35,6 +36,10 @@ class CaptureConfig:
     @property
     def min_segment_frames(self) -> int:
         return max(1, self.min_segment_ms // self.frame_ms)
+
+    @property
+    def max_segment_frames(self) -> int:
+        return max(1, self.max_segment_ms // self.frame_ms)
 
 
 @dataclass(slots=True)

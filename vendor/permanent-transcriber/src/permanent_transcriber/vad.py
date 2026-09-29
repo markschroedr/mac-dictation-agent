@@ -72,33 +72,30 @@ class VadSegmenter:
         if is_speech:
             self.active.mark_voice(timestamp)
             self.silence_frames = 0
+        else:
+            self.silence_frames += 1
+
+        if self.active.frames >= self.cfg.max_segment_frames:
+            return self._finalize(timestamp)
+        if is_speech:
             return None
 
-        self.silence_frames += 1
         if self.silence_frames < self.cfg.hangover_frames:
             return None
 
-        segment = self.active
-        self.active = None
-        self.silence_frames = 0
-        segment.close()
-        if segment.frames < self.cfg.min_segment_frames:
-            segment.path.unlink(missing_ok=True)
-            return None
-
-        ended_at = timestamp
-        return SegmentEvent(
-            started_at=segment.started_at.astimezone(UTC),
-            ended_at=ended_at.astimezone(UTC),
-            duration_ms=segment.frames * self.cfg.frame_ms,
-            pcm_path=segment.path,
-        )
+        return self._finalize(timestamp)
 
     def flush(self, timestamp: datetime) -> SegmentEvent | None:
         if self.active is None:
             return None
+        return self._finalize(timestamp)
+
+    def _finalize(self, timestamp: datetime) -> SegmentEvent | None:
         segment = self.active
+        if segment is None:
+            return None
         self.active = None
+        self.silence_frames = 0
         segment.close()
         if segment.frames < self.cfg.min_segment_frames:
             segment.path.unlink(missing_ok=True)

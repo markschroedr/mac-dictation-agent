@@ -33,6 +33,11 @@
 - Log only modifier events. Include keycode, raw flags, source details, state action, stop reason, and session correlation.
 - Do not change the shortcut state machine without evidence for a specific cause.
 
+## Continuous transcription
+
+- Rotate continuous speech into audio segments after 4 minutes.
+- Transcribe completed segments while capture continues.
+
 ## Progressive speech
 
 - Start every speech request with one natural 15-to-30-word chunk.
