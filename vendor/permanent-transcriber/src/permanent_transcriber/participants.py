@@ -1,135 +1,152 @@
-"""Experimental source-based participant transcript after capture stops."""
+"""Experimental source attribution using timestamp-bounded fuzzy text alignment."""
 from __future__ import annotations
 
+import argparse
 import json
-import subprocess
-import sys
-import tempfile
+import re
+import unicodedata
+from difflib import SequenceMatcher
+from itertools import groupby
 from pathlib import Path
-
-import numpy as np
-from scipy import signal, linalg
 
 from .asr_backends import create_backend
 from .config import default_paths
 
-RATE = 16000
+
+def words(text: str) -> list[tuple[str, int, int]]:
+    return [(unicodedata.normalize('NFKD', m.group()).encode('ascii', 'ignore').decode().lower(),
+             m.start(), m.end()) for m in re.finditer(r"\w+(?:['’]\w+)?", text)]
 
 
-def decode(path: Path) -> np.ndarray:
-    pcm = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(path),
-        '-f', 'f32le', '-ar', str(RATE), '-ac', '1', 'pipe:1'])
-    return np.frombuffer(pcm, dtype='<f4')
+def reconcile(turns: list[dict]) -> tuple[list[dict], list[dict]]:
+    remote = [t for t in turns if t['speaker'] == 'Remote']
+    output = list(remote)
+    decisions = []
+    for mic in (t for t in turns if t['speaker'] == 'Microphone'):
+        tokens = words(mic['text'])
+        candidates = [r for r in remote if r['start'] <= mic['end'] + 2 and r['end'] >= mic['start'] - 2]
+        reference = [w[0] for r in candidates for w in words(r['text'])]
+        matched = set()
+        alignment = SequenceMatcher(None, [w[0] for w in tokens], reference, autojunk=False)
+        for tag, a, b, c, d in alignment.get_opcodes():
+            if tag == 'equal':
+                matched.update(range(a, b))
+            elif tag == 'replace' and b - a == d - c:
+                # Recognize minor spelling/ASR differences without semantic guesses.
+                for i, j in zip(range(a, b), range(c, d)):
+                    if SequenceMatcher(None, tokens[i][0], reference[j]).ratio() >= 0.72:
+                        matched.add(i)
+        coverage = len(matched) / max(1, len(tokens))
+        # ASR can split one word into several ("wahrscheinlich" / "was man sich").
+        # Compare whole normalized phrases as well as word alignment.
+        phrase = ' '.join(w[0] for w in tokens)
+        phrase_duplicate = False
+        for r in candidates:
+            candidate_words = [w[0] for w in words(r['text'])]
+            for size in range(max(1, len(tokens) - 3), min(len(candidate_words), len(tokens) + 3) + 1):
+                for start in range(len(candidate_words) - size + 1):
+                    if SequenceMatcher(None, phrase, ' '.join(candidate_words[start:start + size])).ratio() >= 0.82:
+                        phrase_duplicate = True
+                        break
+                if phrase_duplicate:
+                    break
+            if phrase_duplicate:
+                break
+        # A brief acknowledgment may be a separate local reply. Only suppress
+        # it when the complete text AND onset nearly coincide with remote audio.
+        short_duplicate = len(tokens) <= 3 and any(
+            abs(r['start'] - mic['start']) <= 0.35
+            and [w for w, _ in groupby(t[0] for t in words(r['text']))] == [w for w, _ in groupby(t[0] for t in tokens)]
+            for r in candidates
+        )
+        action = 'keep'
+        retained = [mic]
+        if short_duplicate:
+            action, retained = 'duplicate', []
+        elif len(tokens) > 3 and (coverage >= 0.68 or phrase_duplicate):
+            # Preserve substantial unmatched spans in mixed local/echo segments.
+            runs = []
+            start = None
+            for i in range(len(tokens) + 1):
+                if i < len(tokens) and i not in matched:
+                    if start is None:
+                        start = i
+                elif start is not None:
+                    runs.append((start, i))
+                    start = None
+            local_runs = [(a, b) for a, b in runs if b - a >= 3 and not phrase_duplicate]
+            if local_runs:
+                action = 'partial'
+                retained = []
+                for a, b in local_runs:
+                    text = mic['text'][tokens[a][1]:tokens[b-1][2]]
+                    retained.append({**mic, 'text': text, 'speaker': 'Microphone (uncertain)'})
+            else:
+                action, retained = 'duplicate', []
+        output.extend(retained)
+        decisions.append({'start': mic['start'], 'end': mic['end'], 'action': action,
+                          'matched_fraction': round(coverage, 3),
+                          'retained_text': [t['text'] for t in retained]})
+    return sorted(output, key=lambda t: t['start']), decisions
 
 
-def remove_echo(mic: np.ndarray, remote: np.ndarray) -> tuple[np.ndarray, dict]:
-    # Estimate acoustic delay from waveform correlation, not transcript wording.
-    n = min(len(mic), len(remote))
-    scores = []
-    for start in range(0, n, RATE * 30):
-        m, s = mic[start:start + RATE * 30:4], remote[start:start + RATE * 30:4]
-        if len(m) < 4000 or np.linalg.norm(s) < 0.01:
-            continue
-        c = signal.correlate(m, s, mode='full', method='fft')
-        lags = signal.correlation_lags(len(m), len(s))
-        valid = np.abs(lags) <= 4000
-        i = np.argmax(np.abs(c[valid]))
-        score = abs(c[valid][i]) / (np.linalg.norm(m) * np.linalg.norm(s) + 1e-12)
-        scores.append((float(score), int(lags[valid][i]) * 4))
-    if not scores or max(scores)[0] < 0.08:
-        return mic.copy(), {'echo_detected': False}
-    score, lag = max(scores)
-    aligned = np.zeros(len(mic), dtype=np.float32)
-    if lag >= 0:
-        count = min(len(remote), len(mic) - lag)
-        aligned[lag:lag + count] = remote[:count]
-    else:
-        count = min(len(mic), len(remote) + lag)
-        aligned[:count] = remote[-lag:-lag + count]
-    clean = mic.copy()
-    # Fit a short room-response filter per window. Uncorrelated local speech
-    # remains; changing delays, nonlinear speakers and double-talk are limitations.
-    taps = 256
-    for start in range(0, len(mic), RATE * 30):
-        s = aligned[start:start + RATE * 30].astype(np.float64)
-        m = mic[start:start + len(s)].astype(np.float64)
-        if len(s) <= taps or np.dot(s, s) < 1e-8:
-            continue
-        auto = signal.correlate(s, s, mode='full', method='fft')[len(s)-1:len(s)-1+taps]
-        cross = signal.correlate(m, s, mode='full', method='fft')[len(s)-1:len(s)-1+taps]
-        auto[0] += auto[0] * 0.01
-        h = linalg.solve_toeplitz((auto, auto), cross)
-        clean[start:start + len(s)] -= signal.lfilter(h, [1.0], s).astype(np.float32)
-    # ASR can amplify tiny residual echo back into readable remote speech.
-    # Suppress frames only when the fitted echo explains >95% of mic energy.
-    # Double-talk with a very quiet local speaker can still be lost; experiment
-    # explicitly includes loudspeaker calls to measure this limitation.
-    for start in range(0, len(clean), 320):
-        end = start + 320
-        original_energy = float(np.dot(mic[start:end], mic[start:end]))
-        residual_energy = float(np.dot(clean[start:end], clean[start:end]))
-        if original_energy > 1e-10 and residual_energy < original_energy * 0.05:
-            clean[start:end] = 0
-    return clean, {'echo_detected': True, 'lag_seconds': lag / RATE, 'correlation': score}
-
-
-def transcribe(session: Path) -> None:
+def transcribe(session: Path, *, force: bool = False) -> None:
     paths = default_paths()
     output = paths.transcripts_root / 'participants' / (session.name + '.txt')
-    if output.exists():
+    if output.exists() and not force:
         return
-    microphones = sorted((session / 'microphone').glob('*.opus'))
-    systems = sorted((session / 'system').glob('*.opus'))
-    if not microphones or not systems:
-        raise RuntimeError('Both source tracks are required')
+    backend = create_backend(paths=paths)
     mm = json.loads((session / 'microphone/capture.json').read_text())
     sm = json.loads((session / 'system/capture.json').read_text())
     offset = float(sm['first_received_monotonic']) - float(mm['first_received_monotonic'])
-    # Arrival timestamps provide an initial timeline; waveform matching estimates
-    # loudspeaker delay independently. Neither establishes hardware-clock sync.
-    backend = create_backend(paths=paths)
     turns = []
-    diagnostics = []
-    paths.tmp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='participants-', dir=paths.tmp_root) as temp:
-        for index in range(max(len(microphones), len(systems))):
-            mic = decode(microphones[index]) if index < len(microphones) else np.zeros(0, dtype=np.float32)
-            remote = decode(systems[index]) if index < len(systems) else np.zeros(0, dtype=np.float32)
-            clean, detail = remove_echo(mic, remote)
-            diagnostics.append(detail)
-            for label, chunk, origin in [('Microphone', clean, 0.0), ('Remote', remote, offset)]:
-                start = index * RATE * 60
-                if not len(chunk) or np.max(np.abs(chunk), initial=0) < 1e-5:
-                    continue
-                wav = Path(temp) / 'input.wav'
-                import wave
-                with wave.open(str(wav), 'wb') as f:
-                    f.setparams((1, 2, RATE, 0, 'NONE', 'not compressed'))
-                    f.writeframes((np.clip(chunk, -1, 1) * 32767).astype('<i2').tobytes())
-                result = backend.transcribe_files([wav])
-                segments = result.get('segments', [])
-                if not segments and str(result.get('text', '')).strip():
-                    raise RuntimeError('ASR returned text without timestamps; cannot order participant turns')
-                for seg in segments:
-                    text = str(seg.get('text', '')).strip()
-                    if text:
-                        turns.append({'speaker': label, 'start': max(0, origin + start / RATE + float(seg['start'])), 'text': text})
-    turns.sort(key=lambda t: t['start'])
+    for source, label, origin in [('microphone', 'Microphone', 0.0), ('system', 'Remote', offset)]:
+        files = sorted((session / source).glob('*.opus'))
+        if not files:
+            raise RuntimeError(f'No {source} audio in {session}')
+        elapsed = origin
+        for index, audio in enumerate(files):
+            cache = session / source / f'{index:06d}-asr.json'
+            if cache.exists():
+                result = json.loads(cache.read_text())
+            else:
+                result = backend.transcribe_files([audio])
+                temp = cache.with_suffix('.tmp')
+                temp.write_text(json.dumps(result, ensure_ascii=False))
+                temp.replace(cache)
+            segments = result.get('segments', [])
+            if not segments and str(result.get('text', '')).strip():
+                raise RuntimeError('ASR returned text without timestamps')
+            for seg in segments:
+                text = str(seg.get('text', '')).strip()
+                if text:
+                    turns.append({'speaker': label, 'start': max(0, elapsed + float(seg['start'])),
+                                  'end': max(0, elapsed + float(seg['end'])), 'text': text})
+            # SourceTracks uses fixed 60-second Opus segments. Opus container
+            # duration includes encoder padding; do not accumulate that as drift.
+            elapsed = origin + (index + 1) * 60
+    turns, decisions = reconcile(turns)
     output.parent.mkdir(parents=True, exist_ok=True)
-    content = 'EXPERIMENTAL — Microphone = local input; Remote = system input.\nRemote can contain multiple people; labels are sources, not identified people.\nLoudspeaker echo removal is approximate; duplicates or missing speech remain possible.\n\n'
+    content = 'EXPERIMENTAL — Microphone = local input; Remote = system input.\nTimestamp-bounded fuzzy text deduplication; no echo cancellation or additional language model.\nRemote may contain multiple people. Uncertain mixed passages are marked.\n\n'
     for turn in turns:
         sec = int(turn['start'])
         content += f"[{sec//3600:02d}:{sec//60%60:02d}:{sec%60:02d}] {turn['speaker']}: {turn['text']}\n"
     temporary = output.with_suffix('.tmp')
     temporary.write_text(content)
     temporary.replace(output)
-    (session / 'participants.json').write_text(json.dumps({'output': str(output), 'echo': diagnostics, 'turn_count': len(turns)}, indent=2))
+    (session / 'participants.json').write_text(json.dumps({
+        'output': str(output), 'method': 'timed-fuzzy-text-v1', 'turn_count': len(turns),
+        'microphone_decisions': decisions,
+    }, ensure_ascii=False, indent=2))
 
 
 if __name__ == '__main__':
-    session = Path(sys.argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument('session', type=Path)
+    parser.add_argument('--force', action='store_true')
+    args = parser.parse_args()
     try:
-        transcribe(session)
+        transcribe(args.session, force=args.force)
     except Exception as exc:
-        (session / 'participants-error.txt').write_text(str(exc) + '\n')
+        (args.session / 'participants-error.txt').write_text(str(exc) + '\n')
         raise

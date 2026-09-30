@@ -24,7 +24,8 @@
 - Preserve microphone and system audio as separate Opus tracks when recording both inputs.
 - Keep the separate source tracks for later participant attribution experiments.
 - Provide experimental source-labeled transcripts after dual-input continuous recordings stop.
-- Preserve local speech while reducing system-audio bleed from loudspeakers.
+- Use timestamp-bounded fuzzy text matching to remove repeated remote speech from the microphone transcript.
+- Preserve additional local speech. Do not require another language model or acoustic echo cancellation.
 - Prioritize two-person headphone and loudspeaker calls; defer individual labels for multiple remote speakers.
 - Keep processing lightweight and bounded. Reuse the local transcription service.
 - Defer optional dual-input direct transcription until the continuous-recording experiment is validated.
