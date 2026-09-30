@@ -3441,6 +3441,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let recentDictationsItem = NSMenuItem(title: "Dictations", action: nil, keyEquivalent: "")
     private let recentPermanentRelaxedItem = NSMenuItem(title: "Continuous - Canonical", action: nil, keyEquivalent: "")
     private let recentPermanentQuickItem = NSMenuItem(title: "Continuous - Quick", action: nil, keyEquivalent: "")
+    private let recentParticipantsItem = NSMenuItem(title: "Continuous - Participants (Experimental)", action: nil, keyEquivalent: "")
     private let recentManualItem = NSMenuItem(title: "Audio Files", action: nil, keyEquivalent: "")
     private let recentTTSAudioItem = NSMenuItem(title: "Recent Audio", action: nil, keyEquivalent: "")
     private let microphoneItem = NSMenuItem(title: "Dictation Microphone", action: nil, keyEquivalent: "")
@@ -3600,6 +3601,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         recentTranscriptsMenu.addItem(.separator())
         recentTranscriptsMenu.addItem(recentPermanentRelaxedItem)
         recentTranscriptsMenu.addItem(recentPermanentQuickItem)
+        recentTranscriptsMenu.addItem(recentParticipantsItem)
         recentTranscriptsItem.submenu = recentTranscriptsMenu
         menu.addItem(recentTranscriptsItem)
 
@@ -4081,6 +4083,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             emptyTitle: "No recent quick transcripts",
             records: recursiveTranscriptRecords(
                 in: permanentTranscriberTranscriptRoot.appendingPathComponent("quick")
+            )
+        )
+        recentParticipantsItem.submenu = recentMenu(
+            emptyTitle: "Available after a dual-input recording stops",
+            records: recursiveTranscriptRecords(
+                in: permanentTranscriberTranscriptRoot.appendingPathComponent("participants")
             )
         )
         recentManualItem.submenu = recentMenu(

@@ -4,6 +4,7 @@ import logging
 import os
 import queue
 import signal
+import sys
 import subprocess
 import threading
 import time
@@ -201,6 +202,16 @@ class CaptureService:
                     device=self.config.input_device,
                 )
             self.logger.info("capture stopped")
+            if not failed and self._source_tracks is not None:
+                session = self._source_tracks.root
+                (session / "completed.json").write_text(
+                    '{"experimental_participants": true}\n'
+                )
+                with (session / "participants.log").open("ab") as log:
+                    subprocess.Popen(
+                        [sys.executable, "-m", "permanent_transcriber.participants", str(session)],
+                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                    )
 
     def _start_system_audio(self) -> None:
         helper = self.config.system_audio_helper

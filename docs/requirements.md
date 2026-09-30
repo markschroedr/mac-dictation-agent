@@ -23,7 +23,11 @@
 
 - Preserve microphone and system audio as separate Opus tracks when recording both inputs.
 - Keep the separate source tracks for later participant attribution experiments.
-- Defer automatic participant attribution until a real two-source recording validates the approach.
+- Provide experimental source-labeled transcripts after dual-input continuous recordings stop.
+- Preserve local speech while reducing system-audio bleed from loudspeakers.
+- Prioritize two-person headphone and loudspeaker calls; defer individual labels for multiple remote speakers.
+- Keep processing lightweight and bounded. Reuse the local transcription service.
+- Defer optional dual-input direct transcription until the continuous-recording experiment is validated.
 
 ## Dictation recovery
 

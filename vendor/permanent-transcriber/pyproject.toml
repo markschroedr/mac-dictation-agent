@@ -8,6 +8,7 @@ dependencies = [
   "mlx-audio>=0.4.5",
   "numpy>=2.4.3",
   "sounddevice>=0.5.1",
+  "scipy>=1.12",
   "transformers>=5.5,<5.13",
   "typer>=0.16.0",
   "webrtcvad-wheels>=2.0.14",
