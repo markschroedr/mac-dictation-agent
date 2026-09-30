@@ -127,7 +127,7 @@ def transcribe(session: Path, *, force: bool = False) -> None:
             elapsed = origin + (index + 1) * 60
     turns, decisions = reconcile(turns)
     output.parent.mkdir(parents=True, exist_ok=True)
-    content = 'EXPERIMENTAL — Microphone = local input; Remote = system input.\nTimestamp-bounded fuzzy text deduplication; no echo cancellation or additional language model.\nRemote may contain multiple people. Uncertain mixed passages are marked.\n\n'
+    content = ''
     for turn in turns:
         sec = int(turn['start'])
         content += f"[{sec//3600:02d}:{sec//60%60:02d}:{sec%60:02d}] {turn['speaker']}: {turn['text']}\n"
