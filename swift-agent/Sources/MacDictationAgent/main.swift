@@ -3147,9 +3147,10 @@ struct PermanentTranscriberStatus {
     let includesSystemAudio: Bool
     let quickRunning: Bool
     let relaxedRunning: Bool
+    var participantsRunning: Bool = false
 
     var isRunning: Bool {
-        captureRunning || quickRunning || relaxedRunning
+        captureRunning || quickRunning || relaxedRunning || participantsRunning
     }
 }
 
@@ -3173,6 +3174,7 @@ enum PermanentTranscriberError: Error, CustomStringConvertible, Sendable {
 
 final class PermanentTranscriberController {
     private let queue = DispatchQueue(label: "com.markschroedr.mac-dictation.permanent-transcriber-controller", qos: .utility)
+    private let statusQueue = DispatchQueue(label: "com.markschroedr.mac-dictation.permanent-transcriber-status", qos: .utility)
 
     func status() -> PermanentTranscriberStatus {
         let result = runTool(["status"])
@@ -3200,7 +3202,8 @@ final class PermanentTranscriberController {
             captureError: capture?["error"] as? String,
             includesSystemAudio: capture?["include_system_audio"] as? Bool ?? true,
             quickRunning: quick?["running"] as? Bool ?? false,
-            relaxedRunning: relaxed?["running"] as? Bool ?? false
+            relaxedRunning: relaxed?["running"] as? Bool ?? false,
+            participantsRunning: object["participants_running"] as? Bool ?? false
         )
     }
 
@@ -3230,7 +3233,7 @@ final class PermanentTranscriberController {
     }
 
     func refreshStatus(completion: @escaping @MainActor @Sendable (PermanentTranscriberStatus) -> Void) {
-        queue.async {
+        statusQueue.async {
             let status = self.status()
             Task { @MainActor in
                 completion(status)
@@ -3464,6 +3467,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     )
     private var permanentTranscriberDevices: [PermanentTranscriberDevice] = []
     private var permanentTranscriberRefreshInFlight = false
+    private var permanentOperationInFlight = false
+    private var permanentStopRequested = false
+    private var permanentStatusTimer: Timer?
     private var permanentTranscriberDevicesRefreshInFlight = false
     private var isInteractiveProcessing = false
     private var isPermanentProcessing = false
@@ -3665,6 +3671,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
         refreshPermanentTranscriberState()
         refreshPermanentTranscriberDevices()
+        permanentStatusTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.permanentTranscriberStatus.isRunning || self.permanentOperationInFlight else { return }
+                self.refreshPermanentTranscriberState()
+            }
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -3843,17 +3855,28 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func togglePermanentTranscriber() {
+        guard !permanentOperationInFlight else { return }
         let status = permanentTranscriberStatus
-        if status.isRunning {
+        // Processing is not recording: another Stop must not kill a draining worker.
+        guard status.captureRunning || !status.isRunning else { return }
+        permanentOperationInFlight = true
+        permanentStopRequested = status.captureRunning
+        applyPermanentTranscriberState(status)
+        if status.captureRunning {
             permanentTranscriber.stop { [weak self] result in
-                self?.handlePermanentTranscriberResult(result)
-                self?.refreshPermanentTranscriberState()
+                guard let self else { return }
+                self.permanentOperationInFlight = false
+                self.permanentStopRequested = false
+                self.handlePermanentTranscriberResult(result)
+                self.refreshPermanentTranscriberState()
             }
         } else {
             let mode = PermanentTranscriberMode.current()
             permanentTranscriber.start(mode: mode) { [weak self] result in
-                self?.handlePermanentTranscriberResult(result)
-                self?.refreshPermanentTranscriberState()
+                guard let self else { return }
+                self.permanentOperationInFlight = false
+                self.handlePermanentTranscriberResult(result)
+                self.refreshPermanentTranscriberState()
             }
         }
     }
@@ -4033,9 +4056,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     private func applyPermanentTranscriberState(_ status: PermanentTranscriberStatus) {
-        isPermanentRecording = status.captureRunning && status.captureHealthy
-        isPermanentProcessing = !status.captureRunning && (status.quickRunning || status.relaxedRunning)
-        permanentTranscriberControlItem.title = status.isRunning ? "Stop Continuous Recording" : "Start Continuous Recording"
+        isPermanentRecording = status.captureRunning && status.captureHealthy && !permanentStopRequested
+        isPermanentProcessing = permanentStopRequested || (!status.captureRunning && status.isRunning)
+        permanentTranscriberControlItem.isEnabled = !permanentOperationInFlight && (status.captureRunning || !status.isRunning)
+        permanentTranscriberControlItem.title = permanentStopRequested
+            ? "Stopping Continuous Recording…"
+            : (!status.captureRunning && status.isRunning ? "Processing Recording…" : (status.captureRunning ? "Stop Continuous Recording" : "Start Continuous Recording"))
         let workerStatus: String
         if status.quickRunning && status.relaxedRunning {
             workerStatus = "quick + canonical"
@@ -4046,7 +4072,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         } else {
             workerStatus = "no worker"
         }
-        if status.captureRunning && status.captureHealthy {
+        if permanentStopRequested {
+            permanentTranscriberStatusItem.title = status.captureRunning ? "Status: Stop requested" : "Status: Processing"
+            permanentTranscriberStatusItem.toolTip = nil
+        } else if !status.captureRunning && status.isRunning {
+            permanentTranscriberStatusItem.title = "Status: Processing"
+            permanentTranscriberStatusItem.toolTip = nil
+        } else if status.captureRunning && status.captureHealthy {
             permanentTranscriberStatusItem.title = "Status: Recording - \(workerStatus)"
             permanentTranscriberStatusItem.toolTip = nil
         } else if status.captureRunning {

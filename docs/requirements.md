@@ -19,6 +19,12 @@
 - Keep the replacement simple. Use a brief cutover with the previous app available for rollback.
 - Archive redundant repositories and runtime folders after verifying the replacement.
 
+## Continuous recording status
+
+- Show the stop request immediately and prevent a second Stop during shutdown.
+- Keep status updates responsive while workers drain saved audio.
+- Show processing until canonical and participant transcription jobs finish.
+
 ## Continuous source audio
 
 - Preserve microphone and system audio as separate Opus tracks when recording both inputs.

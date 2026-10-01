@@ -285,9 +285,18 @@ def status() -> None:
             "pid": pid,
             "state_file": str(worker_state_file(paths, profile)),
         }
+    source_root = paths.root / "storage" / "source_tracks"
+    participants_running = any(
+        read_pid(session / "participants.pid") is not None
+        or ((session / "completed.json").exists()
+            and not (session / "participants.json").exists()
+            and not (session / "participants-error.txt").exists())
+        for session in source_root.iterdir() if session.is_dir()
+    ) if source_root.exists() else False
     print(
         json.dumps(
             {
+                "participants_running": participants_running,
                 "capture": {
                     "running": capture_pid is not None,
                     "healthy": capture_healthy,

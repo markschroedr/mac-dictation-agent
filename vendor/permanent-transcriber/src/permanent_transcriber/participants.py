@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 import unicodedata
 from difflib import SequenceMatcher
 from itertools import groupby
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from .asr_backends import create_backend
 from .config import default_paths
+from .process_state import acquire_process_lock
 
 
 def words(text: str) -> list[tuple[str, int, int]]:
@@ -95,6 +97,9 @@ def transcribe(session: Path, *, force: bool = False) -> None:
     output = paths.transcripts_root / 'participants' / (session.name + '.txt')
     if output.exists() and not force:
         return
+    acquire_process_lock(session / 'participants.pid', 'participant transcription')
+    started = time.monotonic()
+    asr_seconds = 0.0
     backend = create_backend(paths=paths)
     mm = json.loads((session / 'microphone/capture.json').read_text())
     sm = json.loads((session / 'system/capture.json').read_text())
@@ -110,7 +115,9 @@ def transcribe(session: Path, *, force: bool = False) -> None:
             if cache.exists():
                 result = json.loads(cache.read_text())
             else:
+                asr_started = time.monotonic()
                 result = backend.transcribe_files([audio])
+                asr_seconds += time.monotonic() - asr_started
                 temp = cache.with_suffix('.tmp')
                 temp.write_text(json.dumps(result, ensure_ascii=False))
                 temp.replace(cache)
@@ -125,7 +132,9 @@ def transcribe(session: Path, *, force: bool = False) -> None:
             # SourceTracks uses fixed 60-second Opus segments. Opus container
             # duration includes encoder padding; do not accumulate that as drift.
             elapsed = origin + (index + 1) * 60
+    matching_started = time.monotonic()
     turns, decisions = reconcile(turns)
+    matching_seconds = time.monotonic() - matching_started
     output.parent.mkdir(parents=True, exist_ok=True)
     content = ''
     for turn in turns:
@@ -137,6 +146,9 @@ def transcribe(session: Path, *, force: bool = False) -> None:
     (session / 'participants.json').write_text(json.dumps({
         'output': str(output), 'method': 'timed-fuzzy-text-v1', 'turn_count': len(turns),
         'microphone_decisions': decisions,
+        'elapsed_seconds': round(time.monotonic() - started, 3),
+        'asr_seconds': round(asr_seconds, 3),
+        'matching_seconds': round(matching_seconds, 3),
     }, ensure_ascii=False, indent=2))
 
 
