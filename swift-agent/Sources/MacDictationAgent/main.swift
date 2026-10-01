@@ -2062,7 +2062,7 @@ private func audioQueueInputHandler(
     recorder.handleInputBuffer(queue: queue, buffer: buffer, packetCount: packetCount)
 }
 
-struct AudioInputDeviceSelection {
+struct AudioInputDeviceSelection: Sendable {
     let uid: String?
     let name: String
     let usesSystemDefault: Bool
@@ -2926,91 +2926,6 @@ func appendJSONLine(_ object: [String: Any], to url: URL) {
     }
 }
 
-struct TranscriptRecord {
-    let transcriptURL: URL
-    let sourceURL: URL
-    let modifiedAt: Date
-    let preview: String
-}
-
-func transcriptRecords(in directory: URL, transcriptName: String? = nil, limit: Int = 5) -> [TranscriptRecord] {
-    guard let entries = try? FileManager.default.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
-        options: [.skipsHiddenFiles]
-    ) else {
-        return []
-    }
-
-    var records: [TranscriptRecord] = []
-    for entry in entries {
-        let values = try? entry.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey])
-        let transcriptURL: URL
-        let sourceURL: URL
-        if let transcriptName {
-            guard values?.isDirectory == true else { continue }
-            let candidate = entry.appendingPathComponent(transcriptName)
-            guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
-            transcriptURL = candidate
-            sourceURL = entry
-        } else {
-            guard entry.pathExtension.lowercased() == "txt" else { continue }
-            transcriptURL = entry
-            sourceURL = entry
-        }
-        let modifiedAt = (try? transcriptURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-            ?? values?.contentModificationDate
-            ?? .distantPast
-        var preview = transcriptPreview(transcriptURL)
-        if preview.isEmpty {
-            guard transcriptName != nil else { continue }
-            preview = "Transcript pending"
-        }
-        records.append(TranscriptRecord(transcriptURL: transcriptURL, sourceURL: sourceURL, modifiedAt: modifiedAt, preview: preview))
-    }
-
-    return records.sorted { $0.modifiedAt > $1.modifiedAt }.prefix(limit).map { $0 }
-}
-
-func recursiveTranscriptRecords(in directory: URL, extensions allowedExtensions: Set<String> = ["md", "txt"], limit: Int = 5) -> [TranscriptRecord] {
-    guard let enumerator = FileManager.default.enumerator(
-        at: directory,
-        includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
-        options: [.skipsHiddenFiles]
-    ) else {
-        return []
-    }
-
-    var records: [TranscriptRecord] = []
-    for case let file as URL in enumerator {
-        guard allowedExtensions.contains(file.pathExtension.lowercased()) else { continue }
-        let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey])
-        guard values?.isRegularFile == true else { continue }
-        let preview = transcriptPreview(file)
-        guard !preview.isEmpty else { continue }
-        records.append(TranscriptRecord(
-            transcriptURL: file,
-            sourceURL: file,
-            modifiedAt: values?.contentModificationDate ?? .distantPast,
-            preview: preview
-        ))
-    }
-    return records.sorted { $0.modifiedAt > $1.modifiedAt }.prefix(limit).map { $0 }
-}
-
-func transcriptPreview(_ url: URL, maxBytes: Int = 4096, maxWords: Int = 14) -> String {
-    guard let handle = try? FileHandle(forReadingFrom: url) else { return "" }
-    let data = (try? handle.read(upToCount: maxBytes)) ?? Data()
-    try? handle.close()
-    let text = sanitize(String(data: data, encoding: .utf8) ?? "")
-    guard !text.isEmpty else { return "" }
-    let words = text.split(separator: " ").prefix(maxWords).joined(separator: " ")
-    if words.count < text.count {
-        return "\(words)..."
-    }
-    return words
-}
-
 func fullTranscript(at url: URL) -> String? {
     guard let text = try? String(contentsOf: url, encoding: .utf8) else {
         return nil
@@ -3454,6 +3369,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private var ttsActionItems: [TTSProvider: NSMenuItem] = [:]
     private var ttsLanguageItems: [TTSLanguage: NSMenuItem] = [:]
     private var permanentModeItems: [PermanentTranscriberMode: NSMenuItem] = [:]
+    private let menuDataQueue = DispatchQueue(label: "com.markschroedr.mac-dictation.menu-data", qos: .utility)
+    private var microphoneRefreshInFlight = false
+    private var recentAudioRefreshInFlight = false
     private var isInteractiveRecording = false
     private var isPermanentRecording = false
     private var systemAudioAccessRequested = false
@@ -3666,8 +3584,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         applyPermanentTranscriberState(permanentTranscriberStatus)
         updatePermanentTranscriberModeState()
         updatePermanentSystemAudioState(permanentTranscriberStatus)
-        rebuildRecentMenus()
-        rebuildMicrophoneMenu()
+        configureRecentMenus()
+        refreshRecentMenus()
+        refreshMicrophoneMenu()
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
         refreshPermanentTranscriberState()
         refreshPermanentTranscriberDevices()
@@ -3680,9 +3599,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        if let pageMenu = menu as? TranscriptPageMenu {
+            refreshTranscriptPage(pageMenu)
+            return
+        }
         updateQuickVoice()
-        rebuildRecentMenus()
-        rebuildMicrophoneMenu()
+        refreshRecentMenus()
+        refreshMicrophoneMenu()
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
         applyPermanentTranscriberState(permanentTranscriberStatus)
         updatePermanentTranscriberModeState()
@@ -3921,7 +3844,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func selectMicrophone(_ sender: NSMenuItem) {
         guard let preference = sender.representedObject as? String else { return }
         AudioInputDeviceSelection.setCurrentPreference(preference)
-        rebuildMicrophoneMenu()
+        refreshMicrophoneMenu()
         logEvent("audio input selected preference=\(preference)")
     }
 
@@ -4100,116 +4023,106 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         updateStatusIcon()
     }
 
-    private func rebuildRecentMenus() {
-        let recoveryDictations = recursiveTranscriptRecords(in: dictationRecoveryDir)
-        let legacyDictations = transcriptRecords(in: dictationTranscriptsDir)
-        let recentDictations = (recoveryDictations + legacyDictations)
-            .sorted { $0.modifiedAt > $1.modifiedAt }
-            .prefix(5)
-        recentDictationsItem.submenu = recentMenu(
-            emptyTitle: "No recent dictations",
-            records: Array(recentDictations)
-        )
-        recentPermanentRelaxedItem.submenu = recentMenu(
-            emptyTitle: "No recent canonical transcripts",
-            records: recursiveTranscriptRecords(
-                in: permanentTranscriberTranscriptRoot.appendingPathComponent("relaxed")
-            )
-        )
-        recentPermanentQuickItem.submenu = recentMenu(
-            emptyTitle: "No recent quick transcripts",
-            records: recursiveTranscriptRecords(
-                in: permanentTranscriberTranscriptRoot.appendingPathComponent("quick")
-            )
-        )
-        recentParticipantsItem.submenu = recentMenu(
-            emptyTitle: "No source transcripts yet",
-            records: recursiveTranscriptRecords(
-                in: permanentTranscriberTranscriptRoot.appendingPathComponent("participants")
-            )
-        )
-        recentManualItem.submenu = recentMenu(
-            emptyTitle: "No recent file transcripts",
-            records: transcriptRecords(in: manualTranscriptsDir)
-        )
-        recentTTSAudioItem.submenu = recentTTSAudioMenu()
+    private func configureRecentMenus() {
+        for (item, collection) in [(recentDictationsItem, TranscriptCollection.dictations),
+                                   (recentPermanentRelaxedItem, .canonical),
+                                   (recentPermanentQuickItem, .quick),
+                                   (recentParticipantsItem, .sources), (recentManualItem, .manual)] {
+            let menu = TranscriptPageMenu(collection: collection)
+            menu.delegate = self
+            item.submenu = menu
+        }
     }
 
-    private func recentTTSAudioMenu() -> NSMenu {
-        let menu = NSMenu()
-        let resourceKeys: Set<URLResourceKey> = [.contentModificationDateKey, .isDirectoryKey]
-        let runDirectories = (try? FileManager.default.contentsOfDirectory(
-            at: ttsAudioDir,
-            includingPropertiesForKeys: Array(resourceKeys),
-            options: [.skipsHiddenFiles]
-        )) ?? []
-        let recentRuns = runDirectories.compactMap { directory -> (URL, Date)? in
-            guard
-                let values = try? directory.resourceValues(forKeys: resourceKeys),
-                values.isDirectory == true
-            else {
-                return nil
+    private func refreshRecentMenus() {
+        for item in [recentDictationsItem, recentPermanentRelaxedItem, recentPermanentQuickItem,
+                     recentParticipantsItem, recentManualItem] {
+            if let menu = item.submenu as? TranscriptPageMenu { refreshTranscriptPage(menu) }
+        }
+        guard !recentAudioRefreshInFlight else { return }
+        recentAudioRefreshInFlight = true
+        menuDataQueue.async { [weak self] in
+            let records = recentAudioRecords(in: ttsAudioDir)
+            Task { @MainActor in
+                guard let self else { return }
+                self.recentAudioRefreshInFlight = false
+                let menu = NSMenu()
+                for record in records {
+                    let item = NSMenuItem(title: record.name, action: #selector(self.openRecentTTSAudio), keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = record.url.path
+                    item.toolTip = record.url.path
+                    menu.addItem(item)
+                }
+                if records.isEmpty {
+                    let item = NSMenuItem(title: "No generated audio", action: nil, keyEquivalent: "")
+                    item.isEnabled = false
+                    menu.addItem(item)
+                }
+                self.recentTTSAudioItem.submenu = menu
             }
-            return (directory, values.contentModificationDate ?? .distantPast)
         }
-        .sorted { $0.1 > $1.1 }
-        .prefix(5)
+    }
 
-        for (directory, _) in recentRuns {
-            let playlist = directory.appendingPathComponent("playlist.m3u")
-            let audioFiles = (try? FileManager.default.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )) ?? []
-            let supportedAudio = audioFiles.filter {
-                ["wav", "mp3", "m4a"].contains($0.pathExtension.lowercased())
+    private func refreshTranscriptPage(_ menu: TranscriptPageMenu) {
+        guard !menu.refreshInFlight else { return }
+        if let refreshedAt = menu.refreshedAt, Date().timeIntervalSince(refreshedAt) < 5 { return }
+        menu.refreshInFlight = true
+        let collection = menu.collection
+        let before = menu.before
+        let queue = menuDataQueue
+        Task { @MainActor [weak self, weak menu] in
+            let page: TranscriptPage = await withCheckedContinuation { continuation in
+                queue.async {
+                    continuation.resume(returning: transcriptPage(collection: collection, before: before))
+                }
             }
-            let audio = supportedAudio.first { $0.deletingPathExtension().lastPathComponent == "audio" }
-                ?? supportedAudio.sorted { $0.lastPathComponent < $1.lastPathComponent }.first
-            let playbackURL = FileManager.default.fileExists(atPath: playlist.path) ? playlist : audio
-            guard let playbackURL else { continue }
-            let item = NSMenuItem(title: directory.lastPathComponent, action: #selector(openRecentTTSAudio), keyEquivalent: "")
-            item.target = self
-            item.representedObject = playbackURL.path
-            item.toolTip = playbackURL.path
-            menu.addItem(item)
+            guard let self, let menu else { return }
+            menu.refreshInFlight = false
+            menu.refreshedAt = Date()
+            menu.removeAllItems()
+            let formatter = DateFormatter()
+            formatter.dateFormat = "MMM d HH:mm"
+            for record in page.records {
+                let item = NSMenuItem(title: "\(record.preview)  \(formatter.string(from: record.modifiedAt))",
+                                     action: #selector(self.copyTranscriptFromMenu), keyEquivalent: "")
+                item.target = self
+                item.representedObject = record.transcriptURL.path
+                item.toolTip = record.sourceURL.path
+                menu.addItem(item)
+            }
+            if page.records.isEmpty {
+                let item = NSMenuItem(title: "No transcripts on this page", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+            }
+            if let cursor = page.nextBefore {
+                menu.addItem(.separator())
+                let older = NSMenuItem(title: "Older…", action: nil, keyEquivalent: "")
+                let nextPage = TranscriptPageMenu(collection: collection, before: cursor)
+                nextPage.delegate = self
+                older.submenu = nextPage
+                menu.addItem(older)
+            }
         }
-
-        if menu.items.isEmpty {
-            let item = NSMenuItem(title: "No generated audio", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        }
-        return menu
     }
 
-    private func recentMenu(emptyTitle: String, records: [TranscriptRecord]) -> NSMenu {
-        let menu = NSMenu()
-        guard !records.isEmpty else {
-            let item = NSMenuItem(title: emptyTitle, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-            return menu
+    private func refreshMicrophoneMenu() {
+        guard !microphoneRefreshInFlight else { return }
+        microphoneRefreshInFlight = true
+        menuDataQueue.async { [weak self] in
+            let options = AudioInputDeviceSelection.allOptions()
+            Task { @MainActor in
+                guard let self else { return }
+                self.microphoneRefreshInFlight = false
+                self.rebuildMicrophoneMenu(options: options)
+            }
         }
-
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d HH:mm"
-        for record in records {
-            let title = "\(record.preview)  \(formatter.string(from: record.modifiedAt))"
-            let item = NSMenuItem(title: title, action: #selector(copyTranscriptFromMenu), keyEquivalent: "")
-            item.target = self
-            item.representedObject = record.transcriptURL.path
-            item.toolTip = record.sourceURL.path
-            menu.addItem(item)
-        }
-        return menu
     }
 
-    private func rebuildMicrophoneMenu() {
+    private func rebuildMicrophoneMenu(options: [AudioInputDeviceSelection]) {
         let menu = NSMenu()
         let currentPreference = AudioInputDeviceSelection.currentPreference()
-        let options = AudioInputDeviceSelection.allOptions()
         selectedMicrophoneName = options.first { $0.preferenceValue == currentPreference }?.name
             ?? options.first?.name
             ?? "No microphone"

@@ -19,6 +19,12 @@
 - Keep the replacement simple. Use a brief cutover with the previous app available for rollback.
 - Archive redundant repositories and runtime folders after verifying the replacement.
 
+## Status menu
+
+- Open the status menu without waiting for filesystem scans or device discovery.
+- Load recent transcripts in pages of 5. Load older pages only when requested.
+- Keep menu data collection in the background and update menu items on the main thread.
+
 ## Continuous recording status
 
 - Show the stop request immediately and prevent a second Stop during shutdown.
