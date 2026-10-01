@@ -1,7 +1,7 @@
 """Preserve unmixed capture inputs; independent of VAD and transcript compaction."""
 from __future__ import annotations
 
-import json
+from .manifest import write_json
 import subprocess
 import time
 import uuid
@@ -15,6 +15,7 @@ class SourceTracks:
             datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
         )
         self.root.mkdir(parents=True)
+        write_json(self.root / "session.json", {"mode": "source-tracks"})
         self.sample_rate = sample_rate
         self.streams: dict[str, tuple[subprocess.Popen, object]] = {}
 
@@ -26,13 +27,13 @@ class SourceTracks:
             folder.mkdir()
             # Arrival time is not a hardware timestamp. Retain it as an alignment
             # hint, not a claim of sample-exact synchronization between devices.
-            (folder / "capture.json").write_text(json.dumps({
+            write_json(folder / "capture.json", {
                 "source": source, "sample_rate": self.sample_rate, "channels": 1,
                 "first_received_at": datetime.now(UTC).isoformat(),
                 "first_received_monotonic": time.monotonic(),
                 "timing": "arrival-time; independent source clocks",
                 "segment_seconds": 60,
-            }, indent=2) + "\n")
+            })
             log = (folder / "encoder.log").open("wb")
             try:
                 process = subprocess.Popen([
@@ -40,6 +41,7 @@ class SourceTracks:
                     "-f", "s16le", "-ar", str(self.sample_rate), "-ac", "1",
                     "-i", "pipe:0", "-c:a", "libopus", "-b:a", "48k",
                     "-f", "segment", "-segment_time", "60", "-reset_timestamps", "1",
+                    "-segment_list", str(folder / "chunks.csv"), "-segment_list_type", "csv",
                     str(folder / "%06d.opus"),
                 ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log)
             except BaseException:

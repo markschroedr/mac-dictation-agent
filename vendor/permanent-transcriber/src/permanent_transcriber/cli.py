@@ -170,7 +170,7 @@ def start(
         raise typer.Exit(1)
 
     profiles = []
-    if quick:
+    if quick and not config.include_system_audio:
         profiles.append("quick")
     profiles.append("relaxed")
     for profile in profiles:
@@ -254,6 +254,14 @@ def stop() -> None:
     ]
     capture_stopped = capture_service.stop()
     worker_results = {worker.profile.name: worker.stop() for worker in worker_services}
+    from .source_transcripts import processing_status
+    source_pending, source_error = processing_status(paths)
+    if source_pending and not source_error:
+        typer.echo("Source transcription is unfinished; start the worker again to resume saved chunks")
+        raise typer.Exit(1)
+    if source_error:
+        typer.echo(f"source transcription failed: {source_error.strip()}")
+        raise typer.Exit(1)
     if not capture_stopped and not any(worker_results.values()):
         typer.echo("capture and worker are not running")
         raise typer.Exit(1)
@@ -285,18 +293,13 @@ def status() -> None:
             "pid": pid,
             "state_file": str(worker_state_file(paths, profile)),
         }
-    source_root = paths.root / "storage" / "source_tracks"
-    participants_running = any(
-        read_pid(session / "participants.pid") is not None
-        or ((session / "completed.json").exists()
-            and not (session / "participants.json").exists()
-            and not (session / "participants-error.txt").exists())
-        for session in source_root.iterdir() if session.is_dir()
-    ) if source_root.exists() else False
+    from .source_transcripts import processing_status
+    source_pending, source_error = processing_status(paths)
     print(
         json.dumps(
             {
-                "participants_running": participants_running,
+                "source_pending": source_pending,
+                "source_error": source_error,
                 "capture": {
                     "running": capture_pid is not None,
                     "healthy": capture_healthy,

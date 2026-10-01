@@ -28,8 +28,11 @@
 ## Continuous source audio
 
 - Preserve microphone and system audio as separate Opus tracks when recording both inputs.
-- Keep the separate source tracks for later participant attribution experiments.
-- Provide experimental source-labeled transcripts after dual-input continuous recordings stop.
+- Keep original source Opus chunks at 48 kbit/s. Do not encode them again after transcription.
+- Use the existing permanent worker and shared ASR service for both recording modes.
+- Transcribe closed 60-second source chunks during dual-input recording and publish source-labeled transcripts.
+- Omit mixed-audio transcription and Sortformer in dual-input mode. Keep the microphone-only path unchanged.
+- Drain the final source chunks after Stop and resume unfinished chunks from saved ASR results.
 - Use timestamp-bounded fuzzy text matching to remove repeated remote speech from the microphone transcript.
 - Preserve additional local speech. Do not require another language model or acoustic echo cancellation.
 - Prioritize two-person headphone and loudspeaker calls; defer individual labels for multiple remote speakers.
@@ -54,7 +57,7 @@
 
 - Let the user include or exclude system audio from continuous recording.
 - Include microphone and system audio by default.
-- Mix selected audio sources into one transcription stream.
+- Keep selected audio sources separate and combine their timestamped transcripts.
 - Do not let the user change audio sources while continuous recording runs.
 - Rotate continuous speech into audio segments after 4 minutes.
 - Transcribe completed segments while capture continues.

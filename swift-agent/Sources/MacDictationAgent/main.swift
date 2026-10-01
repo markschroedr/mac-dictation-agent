@@ -3147,10 +3147,10 @@ struct PermanentTranscriberStatus {
     let includesSystemAudio: Bool
     let quickRunning: Bool
     let relaxedRunning: Bool
-    var participantsRunning: Bool = false
+    var sourcePending: Bool = false
 
     var isRunning: Bool {
-        captureRunning || quickRunning || relaxedRunning || participantsRunning
+        captureRunning || quickRunning || relaxedRunning
     }
 }
 
@@ -3199,11 +3199,11 @@ final class PermanentTranscriberController {
         return PermanentTranscriberStatus(
             captureRunning: capture?["running"] as? Bool ?? false,
             captureHealthy: capture?["healthy"] as? Bool ?? false,
-            captureError: capture?["error"] as? String,
+            captureError: (capture?["error"] as? String) ?? (object["source_error"] as? String),
             includesSystemAudio: capture?["include_system_audio"] as? Bool ?? true,
             quickRunning: quick?["running"] as? Bool ?? false,
             relaxedRunning: relaxed?["running"] as? Bool ?? false,
-            participantsRunning: object["participants_running"] as? Bool ?? false
+            sourcePending: object["source_pending"] as? Bool ?? false
         )
     }
 
@@ -3444,7 +3444,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let recentDictationsItem = NSMenuItem(title: "Dictations", action: nil, keyEquivalent: "")
     private let recentPermanentRelaxedItem = NSMenuItem(title: "Continuous - Canonical", action: nil, keyEquivalent: "")
     private let recentPermanentQuickItem = NSMenuItem(title: "Continuous - Quick", action: nil, keyEquivalent: "")
-    private let recentParticipantsItem = NSMenuItem(title: "Continuous - Participants (Experimental)", action: nil, keyEquivalent: "")
+    private let recentParticipantsItem = NSMenuItem(title: "Continuous - Sources", action: nil, keyEquivalent: "")
     private let recentManualItem = NSMenuItem(title: "Audio Files", action: nil, keyEquivalent: "")
     private let recentTTSAudioItem = NSMenuItem(title: "Recent Audio", action: nil, keyEquivalent: "")
     private let microphoneItem = NSMenuItem(title: "Dictation Microphone", action: nil, keyEquivalent: "")
@@ -4021,6 +4021,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func updatePermanentSystemAudioState(_ status: PermanentTranscriberStatus) {
         permanentSystemAudioItem.state = status.includesSystemAudio ? .on : .off
+        permanentTranscriberModeItem.isHidden = status.includesSystemAudio
         permanentSystemAudioItem.isEnabled = !status.isRunning
         permanentSystemAudioItem.toolTip = status.isRunning
             ? "Stop continuous recording before changing audio sources"
@@ -4079,14 +4080,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             permanentTranscriberStatusItem.title = "Status: Processing"
             permanentTranscriberStatusItem.toolTip = nil
         } else if status.captureRunning && status.captureHealthy {
-            permanentTranscriberStatusItem.title = "Status: Recording - \(workerStatus)"
-            permanentTranscriberStatusItem.toolTip = nil
+            permanentTranscriberStatusItem.title = status.captureError == nil
+                ? "Status: Recording - \(workerStatus)" : "Status: Recording - transcription error"
+            permanentTranscriberStatusItem.toolTip = status.captureError
         } else if status.captureRunning {
             permanentTranscriberStatusItem.title = "Status: Starting"
             permanentTranscriberStatusItem.toolTip = nil
         } else if let error = status.captureError, !error.isEmpty {
             permanentTranscriberStatusItem.title = "Status: Error"
             permanentTranscriberStatusItem.toolTip = error
+        } else if status.sourcePending {
+            permanentTranscriberStatusItem.title = "Status: Transcription pending - start to resume"
+            permanentTranscriberStatusItem.toolTip = nil
         } else {
             permanentTranscriberStatusItem.title = "Status: Stopped"
             permanentTranscriberStatusItem.toolTip = nil
@@ -4118,7 +4123,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             )
         )
         recentParticipantsItem.submenu = recentMenu(
-            emptyTitle: "Available after a dual-input recording stops",
+            emptyTitle: "No source transcripts yet",
             records: recursiveTranscriptRecords(
                 in: permanentTranscriberTranscriptRoot.appendingPathComponent("participants")
             )

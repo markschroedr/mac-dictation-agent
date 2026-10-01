@@ -4,7 +4,6 @@ import logging
 import os
 import queue
 import signal
-import sys
 import subprocess
 import threading
 import time
@@ -34,11 +33,9 @@ class CaptureService:
         self.frame_queue: queue.Queue[tuple[bytes, datetime] | None] = queue.Queue(
             maxsize=config.queue_max_frames
         )
-        self.writer = SegmentWriter(paths=paths, config=config)
+        self.writer = None if config.include_system_audio else SegmentWriter(paths=paths, config=config)
         self._stop = False
         self._dropped_frames = 0
-        self._system_audio = bytearray()
-        self._system_audio_lock = threading.Lock()
         self._system_audio_process: subprocess.Popen[bytes] | None = None
         self._system_audio_thread: threading.Thread | None = None
         self._source_tracks: SourceTracks | None = None
@@ -47,7 +44,8 @@ class CaptureService:
     def run_forever(self) -> None:
         self.paths.ensure()
         acquire_process_lock(self.paths.pid_file, "capture")
-        self.writer.start()
+        if self.writer is not None:
+            self.writer.start()
         monitor = CaptureSignalMonitor(self.config.digital_silence_timeout_seconds)
         healthy = False
         failed = False
@@ -57,8 +55,9 @@ class CaptureService:
             pid=os.getpid(),
             device=self.config.input_device,
         )
-        vad = webrtcvad.Vad(self.config.vad_aggressiveness)
-        segmenter = VadSegmenter(cfg=self.config, paths=self.paths, vad=vad)
+        segmenter = None if self.config.include_system_audio else VadSegmenter(
+            cfg=self.config, paths=self.paths, vad=webrtcvad.Vad(self.config.vad_aggressiveness)
+        )
 
         def callback(indata, frames, time_info, status) -> None:
             if status:
@@ -79,7 +78,7 @@ class CaptureService:
         try:
             if self.config.include_system_audio:
                 self._source_tracks = SourceTracks(self.paths.root, self.config.sample_rate_hz)
-                self._start_system_audio()
+                self._start_system_audio(monitor)
             with sd.RawInputStream(
                 samplerate=self.config.sample_rate_hz,
                 channels=self.config.channels,
@@ -104,7 +103,6 @@ class CaptureService:
                     frame, timestamp = item
                     if self._source_tracks is not None:
                         self._source_tracks.write("microphone", frame)
-                        frame = self._mix_system_audio(frame)
                     monitor.observe(frame)
                     monitor.check()
                     if monitor.has_signal and not healthy:
@@ -115,8 +113,9 @@ class CaptureService:
                             pid=os.getpid(),
                             device=self.config.input_device,
                         )
-                    event = segmenter.process_frame(frame, timestamp)
+                    event = segmenter.process_frame(frame, timestamp) if segmenter is not None else None
                     if event is not None:
+                        assert self.writer is not None
                         self.writer.submit(
                             FinalizedSegment(
                                 started_at=event.started_at,
@@ -162,8 +161,9 @@ class CaptureService:
             )
             raise
         finally:
-            flushed = segmenter.flush(datetime.now(UTC))
+            flushed = segmenter.flush(datetime.now(UTC)) if segmenter is not None else None
             if flushed is not None:
+                assert self.writer is not None
                 self.writer.submit(
                     FinalizedSegment(
                         started_at=flushed.started_at,
@@ -172,8 +172,8 @@ class CaptureService:
                         pcm_path=flushed.pcm_path,
                     )
                 )
-            self._stop_system_audio()
             try:
+                self._stop_system_audio()
                 if self._source_tracks is not None:
                     # Preserve queued microphone frames even when Stop was pressed.
                     try:
@@ -185,15 +185,24 @@ class CaptureService:
                         self._source_tracks.close()
                     if self._system_audio_error is not None:
                         raise RuntimeError("System source audio is incomplete") from self._system_audio_error
+                    if not failed:
+                        (self._source_tracks.root / "closed.json").write_text('{}\n')
             except Exception as exc:
                 failed = True
+                if self._source_tracks is not None:
+                    (self._source_tracks.root / "capture-error.txt").write_text(str(exc) + '\n')
                 write_capture_health(
                     self.paths.capture_health_file, status="error", pid=os.getpid(),
                     device=self.config.input_device, error=str(exc),
                 )
                 raise
             finally:
-                self.writer.close()
+                if self.writer is not None:
+                    self.writer.close()
+                if failed and self._source_tracks is not None:
+                    error = self._source_tracks.root / "capture-error.txt"
+                    if not error.exists():
+                        error.write_text('Capture failed; source recording is incomplete\n')
             if not failed:
                 write_capture_health(
                     self.paths.capture_health_file,
@@ -202,18 +211,8 @@ class CaptureService:
                     device=self.config.input_device,
                 )
             self.logger.info("capture stopped")
-            if not failed and self._source_tracks is not None:
-                session = self._source_tracks.root
-                (session / "completed.json").write_text(
-                    '{"experimental_participants": true}\n'
-                )
-                with (session / "participants.log").open("ab") as log:
-                    subprocess.Popen(
-                        [sys.executable, "-m", "permanent_transcriber.participants", str(session)],
-                        stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-                    )
 
-    def _start_system_audio(self) -> None:
+    def _start_system_audio(self, monitor: CaptureSignalMonitor) -> None:
         helper = self.config.system_audio_helper
         if not helper or not Path(helper).is_file():
             raise RuntimeError("system audio capture helper is missing; reinstall Mac Dictation Agent")
@@ -241,31 +240,12 @@ class CaptureService:
                         break
                     assert self._source_tracks is not None
                     self._source_tracks.write("system", chunk)
-                    with self._system_audio_lock:
-                        self._system_audio.extend(chunk)
-                        maximum = self.config.sample_rate_hz * 2
-                        if len(self._system_audio) > maximum:
-                            del self._system_audio[:-maximum]
+                    monitor.observe(chunk)
             except Exception as exc:
                 self._system_audio_error = exc
 
         self._system_audio_thread = threading.Thread(target=read_audio, daemon=True)
         self._system_audio_thread.start()
-
-    def _mix_system_audio(self, microphone: bytes) -> bytes:
-        with self._system_audio_lock:
-            take = min(len(microphone), len(self._system_audio))
-            system = bytes(self._system_audio[:take])
-            del self._system_audio[:take]
-        if take < len(microphone):
-            system += bytes(len(microphone) - take)
-        mixed = bytearray(len(microphone))
-        for offset in range(0, len(microphone), 2):
-            mic = int.from_bytes(microphone[offset : offset + 2], "little", signed=True)
-            desktop = int.from_bytes(system[offset : offset + 2], "little", signed=True)
-            value = max(-32768, min(32767, mic + desktop))
-            mixed[offset : offset + 2] = value.to_bytes(2, "little", signed=True)
-        return bytes(mixed)
 
     def _stop_system_audio(self) -> None:
         process = self._system_audio_process
@@ -276,10 +256,13 @@ class CaptureService:
             except subprocess.TimeoutExpired:
                 process.kill()
         if self._system_audio_thread is not None:
-            self._system_audio_thread.join()
+            self._system_audio_thread.join(timeout=5)
+            if self._system_audio_thread.is_alive():
+                raise RuntimeError("System audio reader did not stop; source recording is incomplete")
 
     def stop(self) -> bool:
-        return stop_process(self.paths.pid_file, timeout_seconds=10.0)
+        # Both encoders can each require 30 s to close, after the helper exits.
+        return stop_process(self.paths.pid_file, timeout_seconds=75.0)
 
     @staticmethod
     def read_pid(path: Path) -> int | None:

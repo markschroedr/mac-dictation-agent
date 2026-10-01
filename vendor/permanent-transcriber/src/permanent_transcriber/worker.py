@@ -17,6 +17,7 @@ from .diarization import SortformerDiarizer, asr_segments_from_result
 from .ffmpeg_tools import reencode_audio_to_opus, sha256_file
 from .manifest import append_jsonl, append_text, load_json, read_jsonl, write_json
 from .process_state import acquire_process_lock, read_live_pid, stop_process
+from .source_transcripts import process_sessions
 
 
 @dataclass(slots=True)
@@ -87,6 +88,7 @@ class TranscriptionWorker:
         self._state_loaded = False
         self._backend: AsrBackend | None = None
         self._diarizer: SortformerDiarizer | None = None
+        self._failed_source_sessions: set[Path] = set()
 
     @property
     def state_file(self) -> Path:
@@ -167,6 +169,8 @@ class TranscriptionWorker:
         self.paths.ensure()
         if reload_state and not self._state_loaded:
             self._load_state()
+        source_count = (process_sessions(self.paths, self.backend, self._failed_source_sessions)
+                        if self.profile.name == "relaxed" else 0)
         rows = read_jsonl(self.paths.segments_manifest)
         if self._read_cursor > len(rows):
             self.logger.warning(
@@ -188,14 +192,14 @@ class TranscriptionWorker:
             self.logger.info("worker queued %s new segments profile=%s", len(next_rows), self.profile.name)
 
         if not self._pending:
-            return 0
+            return source_count
         if not flush_partial and not self._batch_ready():
-            return 0
+            return source_count
 
         processed_count = self._flush_batch()
         if commit_state:
             self._commit_processed(processed_count)
-        return processed_count
+        return processed_count + source_count
 
     def _batch_ready(self) -> bool:
         if len(self._pending) >= self.profile.batch_max_segments:
