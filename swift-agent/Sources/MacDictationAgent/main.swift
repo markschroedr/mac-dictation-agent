@@ -91,6 +91,7 @@ let fluidTranscribeTimeoutSeconds = Double(ProcessInfo.processInfo.environment["
 let audioInputDefaultsKey = "audioInputName"
 let retainSuccessfulAudioDefaultsKey = "retainSuccessfulDictationAudio"
 let recoveryRetentionHoursDefaultsKey = "dictationRecoveryRetentionHours"
+let soundEffectsDefaultsKey = "soundEffectsEnabled"
 let defaultRecoveryRetentionHours = 24
 let launchAgentLabel = ProcessInfo.processInfo.environment["MAC_DICTATION_LAUNCH_AGENT_LABEL"]
     ?? "com.markschroedr.mac-dictation"
@@ -3360,6 +3361,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let quickTTSItem = NSMenuItem(title: "Quick Speak Clipboard…", action: #selector(speakClipboardQuick), keyEquivalent: "")
     private var quickVoiceItems: [QuickTTSPreset: NSMenuItem] = [:]
     private let startAtLoginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin), keyEquivalent: "")
+    private let soundEffectsItem = NSMenuItem(title: "Sound Effects", action: #selector(toggleSoundEffects), keyEquivalent: "")
     private let permanentTranscriberStatusItem = NSMenuItem(title: "Status: Stopped", action: nil, keyEquivalent: "")
     private let permanentTranscriberModeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
     private let permanentTranscriberControlItem = NSMenuItem(title: "Start Continuous Recording", action: #selector(togglePermanentTranscriber), keyEquivalent: "")
@@ -3567,6 +3569,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
         recoveryRetentionItem.submenu = recoveryRetentionMenu
         settingsMenu.addItem(recoveryRetentionItem)
+        soundEffectsItem.target = self
+        soundEffectsItem.state = UserDefaults.standard.bool(forKey: soundEffectsDefaultsKey) ? .on : .off
+        settingsMenu.addItem(soundEffectsItem)
 
         let diagnosticsItem = NSMenuItem(title: "Diagnostics", action: nil, keyEquivalent: "")
         let diagnosticsMenu = NSMenu()
@@ -3642,6 +3647,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     func setInteractiveProcessing(_ active: Bool) {
         isInteractiveProcessing = active
         updateStatusIcon()
+    }
+
+    @objc private func toggleSoundEffects() {
+        let enabled = !UserDefaults.standard.bool(forKey: soundEffectsDefaultsKey)
+        UserDefaults.standard.set(enabled, forKey: soundEffectsDefaultsKey)
+        soundEffectsItem.state = enabled ? .on : .off
     }
 
     @objc private func toggleStartAtLogin() {
@@ -5681,15 +5692,21 @@ func pasteClipboard() -> Bool {
     return true
 }
 
+// Off unless enabled in Settings; an unset default reads as false.
+func soundEffectsEnabled() -> Bool { UserDefaults.standard.bool(forKey: soundEffectsDefaultsKey) }
+
 func playStartSound() {
+    guard soundEffectsEnabled() else { return }
     AudioServicesPlaySystemSound(1104)
 }
 
 func playStopSound() {
+    guard soundEffectsEnabled() else { return }
     AudioServicesPlaySystemSound(1105)
 }
 
 func playLockSound() {
+    guard soundEffectsEnabled() else { return }
     DispatchQueue.main.async {
         guard let sound = NSSound(named: NSSound.Name("Pop")) else {
             AudioServicesPlaySystemSound(1104)
@@ -5701,6 +5718,7 @@ func playLockSound() {
 }
 
 func playErrorSound() {
+    guard soundEffectsEnabled() else { return }
     AudioServicesPlaySystemSound(1053)
 }
 
