@@ -32,10 +32,23 @@ public struct DictationServiceRequest: Codable, Sendable {
     }
 }
 
+public struct DictationTextSegment: Codable, Sendable {
+    public let start: Double
+    public let end: Double
+    public let text: String
+
+    public init(start: Double, end: Double, text: String) {
+        self.start = start
+        self.end = end
+        self.text = text
+    }
+}
+
 public struct DictationServiceResponse: Codable, Sendable {
     public let id: String
     public let text: String?
     public let rawText: String?
+    public let segments: [DictationTextSegment]?
     public let durationSeconds: Double?
     public let recognizeSeconds: Double?
     public let speedup: Double?
@@ -45,6 +58,7 @@ public struct DictationServiceResponse: Codable, Sendable {
         id: String,
         text: String? = nil,
         rawText: String? = nil,
+        segments: [DictationTextSegment]? = nil,
         durationSeconds: Double? = nil,
         recognizeSeconds: Double? = nil,
         speedup: Double? = nil,
@@ -53,6 +67,7 @@ public struct DictationServiceResponse: Codable, Sendable {
         self.id = id
         self.text = text
         self.rawText = rawText
+        self.segments = segments
         self.durationSeconds = durationSeconds
         self.recognizeSeconds = recognizeSeconds
         self.speedup = speedup
@@ -64,6 +79,7 @@ public struct DictationServiceResponse: Codable, Sendable {
             id: id,
             text: text,
             rawText: rawText,
+            segments: segments,
             durationSeconds: durationSeconds,
             recognizeSeconds: recognizeSeconds,
             speedup: speedup,

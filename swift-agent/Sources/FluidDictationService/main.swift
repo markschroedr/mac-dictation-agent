@@ -64,6 +64,25 @@ private final class FluidASRService {
         return loadedManager
     }
 
+    private func timedSegments(_ result: ASRResult) -> [DictationTextSegment] {
+        let words = buildWordTimings(from: result.tokenTimings ?? [])
+        var segments: [DictationTextSegment] = []
+        var text = ""
+        var start = 0.0
+        var end = 0.0
+        for word in words {
+            if !text.isEmpty && word.startTime - end >= 0.7 {
+                segments.append(DictationTextSegment(start: start, end: end, text: text))
+                text = ""
+            }
+            if text.isEmpty { start = word.startTime }
+            text += (text.isEmpty ? "" : " ") + word.word
+            end = word.endTime
+        }
+        if !text.isEmpty { segments.append(DictationTextSegment(start: start, end: end, text: text)) }
+        return segments
+    }
+
     private func transcribe(_ request: DictationServiceRequest) async throws -> DictationServiceResponse {
         guard
             let sessionID = request.sessionID,
@@ -113,6 +132,7 @@ private final class FluidASRService {
             id: request.id,
             text: result.text,
             rawText: result.text,
+            segments: timedSegments(result),
             durationSeconds: sourceDuration,
             recognizeSeconds: elapsed,
             speedup: elapsed > 0 ? sourceDuration / elapsed : nil

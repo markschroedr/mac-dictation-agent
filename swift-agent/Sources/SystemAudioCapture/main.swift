@@ -6,6 +6,9 @@ import ScreenCaptureKit
 final class SystemAudioOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let output = FileHandle.standardOutput
     private let errorOutput = FileHandle.standardError
+    private let continuousPCM = CommandLine.arguments.contains("--continuous-pcm")
+    private var firstTimestamp: Double?
+    private var emittedFrames = 0
 
     func stream(
         _ stream: SCStream,
@@ -63,6 +66,21 @@ final class SystemAudioOutput: NSObject, SCStreamOutput, SCStreamDelegate, @unch
             withUnsafeBytes(of: &value) { pcm.append(contentsOf: $0) }
         }
         do {
+            if continuousPCM {
+                let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                guard timestamp.isNumeric else { throw NSError(domain: "SystemAudioCapture", code: 2) }
+                let seconds = CMTimeGetSeconds(timestamp)
+                if firstTimestamp == nil { firstTimestamp = seconds }
+                let expectedFrame = max(0, Int(((seconds - firstTimestamp!) * 16_000).rounded()))
+                var missingFrames = max(0, expectedFrame - emittedFrames)
+                while missingFrames > 0 {
+                    let count = min(missingFrames, 16_000)
+                    try output.write(contentsOf: Data(count: count * 2))
+                    emittedFrames += count
+                    missingFrames -= count
+                }
+                emittedFrames += frameCount
+            }
             try output.write(contentsOf: pcm)
         } catch {
             exit(1)

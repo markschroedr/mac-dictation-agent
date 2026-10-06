@@ -45,6 +45,16 @@
 - Keep processing lightweight and bounded. Reuse the local transcription service.
 - Defer optional dual-input direct transcription until the continuous-recording experiment is validated.
 
+## Dual-input dictation
+
+- Keep ordinary microphone-only dictation unchanged.
+- Add a separate shortcut for microphone and system-audio dictation.
+- Transcribe both sources incrementally through the existing FluidAudio service.
+- Combine source-labeled text by timestamps before insertion.
+- Prioritize complete text over duplicate removal. Keep possible duplicates in the first version.
+- Preserve source audio for recovery and report partial transcription failures.
+- Build the change without installing it or restarting the running service.
+
 ## Dictation recovery
 
 - Save every interactive dictation directly in a durable session directory.

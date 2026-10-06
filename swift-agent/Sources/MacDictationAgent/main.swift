@@ -2231,6 +2231,7 @@ private func coreAudioUInt32Property(_ deviceID: AudioDeviceID, _ selector: Audi
 }
 
 struct TranscriptionResponse: Decodable {
+    var segments: [DictationTextSegment]? = nil
     let text: String?
     let raw_text: String?
     let duration_seconds: Double?
@@ -2320,6 +2321,7 @@ final class FluidDictationClient {
                         + "attempt=\(attempt) total=\(String(format: "%.3f", elapsed))s"
                 )
                 return TranscriptionResponse(
+                    segments: response.segments,
                     text: response.text,
                     raw_text: response.rawText,
                     duration_seconds: response.durationSeconds,
@@ -3430,7 +3432,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(title)
         appStatusItem.isEnabled = false
         menu.addItem(appStatusItem)
-        let hint = NSMenuItem(title: "Hold Control+Shift to dictate", action: nil, keyEquivalent: "")
+        let hint = NSMenuItem(title: "Dictate: Control+Shift · Mic + System: Control+Command", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         menu.addItem(hint)
         menu.addItem(.separator())
@@ -4309,6 +4311,14 @@ private final class InteractiveDictationSession: @unchecked Sendable {
     let recoveryDirectory: URL
     let transcriptURL: URL
     let prepareGroup = DispatchGroup()
+    let includesSystemAudio: Bool
+    let captureStartedAt = DispatchTime.now().uptimeNanoseconds
+    var systemTrack: SystemDictationTrack?
+    var systemTimer: DispatchSourceTimer?
+    var microphoneOffset = 0.0
+    private var sourceTurns: [(start: Double, source: String, text: String)] = []
+    private var failureMessages: [String] = []
+    var systemFailureReported = false
 
     private let lock = NSLock()
     private var chunkIndex = 0
@@ -4320,7 +4330,8 @@ private final class InteractiveDictationSession: @unchecked Sendable {
     private var chunkTexts: [Int: String] = [:]
     private var nextCommitIndex = 1
 
-    init(recoveryRoot: URL = dictationRecoveryDir) throws {
+    init(recoveryRoot: URL = dictationRecoveryDir, includesSystemAudio: Bool = false) throws {
+        self.includesSystemAudio = includesSystemAudio
         id = UUID().uuidString
         recoveryDirectory = try createRecoverySessionDirectory(root: recoveryRoot, sessionID: id)
         transcriptURL = recoveryDirectory.appendingPathComponent("transcript.txt")
@@ -4342,6 +4353,19 @@ private final class InteractiveDictationSession: @unchecked Sendable {
         prepareGroup.leave()
     }
 
+    func recordFailure(_ message: String) {
+        lock.lock()
+        failureMessages.append(message)
+        lock.unlock()
+        try? Data(message.utf8).write(to: recoveryDirectory.appendingPathComponent("transcription-error.txt"), options: .atomic)
+    }
+
+    var hasFailures: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !failureMessages.isEmpty
+    }
+
     func registerChunk() -> Int {
         lock.lock()
         defer { lock.unlock() }
@@ -4356,9 +4380,29 @@ private final class InteractiveDictationSession: @unchecked Sendable {
         lock.unlock()
     }
 
-    func completeChunk(index: Int, text: String) -> String? {
+    func completeChunk(index: Int, text: String, source: String = "Mic", offset: Double = 0,
+                       segments: [DictationTextSegment] = []) -> String? {
         lock.lock()
-        chunkTexts[index] = text
+        if includesSystemAudio {
+            // Use precise timing only when it covers the entire recognized text.
+            // Never discard words merely because token timings are incomplete.
+            let timedText = segments.map(\.text).joined(separator: " ")
+            let normalize: (String) -> String = { $0.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+            if !segments.isEmpty && normalize(timedText) == normalize(text) {
+                for segment in segments {
+                    sourceTurns.append((offset + segment.start, source, segment.text))
+                }
+            } else if !text.isEmpty {
+                sourceTurns.append((offset, source, text))
+            }
+            committedText = sourceTurns.sorted {
+                $0.start == $1.start ? $0.source < $1.source : $0.start < $1.start
+            }.map { turn in
+                let seconds = max(0, Int(turn.start))
+                return String(format: "[%02d:%02d] %@: %@", seconds / 60, seconds % 60, turn.source, turn.text)
+            }.joined(separator: "\n")
+        }
+        chunkTexts[index] = includesSystemAudio ? "" : text
         while let nextText = chunkTexts[nextCommitIndex] {
             if !nextText.isEmpty {
                 let separator = committedText.isEmpty ? "" : " "
@@ -5035,11 +5079,17 @@ final class DictationAgent {
         }
     }
 
-    private func startRecording(triggerEventID: UInt64? = nil) {
+    private func startRecording(triggerEventID: UInt64? = nil, includesSystemAudio: Bool = false) {
         guard !isRecording else { return }
+        var startingSession: InteractiveDictationSession?
         var failedRecoveryDirectory: URL?
         do {
-            let session = try InteractiveDictationSession()
+            if includesSystemAudio && !CGPreflightScreenCaptureAccess() {
+                CGRequestScreenCaptureAccess()
+                throw ASRClientError.requestFailed("Mic + System requires Screen Recording permission. Grant access and try again.")
+            }
+            let session = try InteractiveDictationSession(includesSystemAudio: includesSystemAudio)
+            startingSession = session
             failedRecoveryDirectory = session.recoveryDirectory
             protectRecoveryDirectory(session.recoveryDirectory)
             let trigger = triggerEventID.map(String.init) ?? "none"
@@ -5053,14 +5103,29 @@ final class DictationAgent {
                 filename: session.initialAudioFilename
             )
             logEvent("audio recorder start end session=\(session.id)")
+            if includesSystemAudio {
+                session.systemTrack = try SystemDictationTrack(executable: systemAudioHelperExecutable,
+                    directory: session.recoveryDirectory, startedAt: session.captureStartedAt)
+            }
             activeSession = session
             isRecording = true
             updateInteractiveRecordingIndicator(true)
             playStartSound()
             prepareASRSession(session)
+            if includesSystemAudio {
+                let timer = DispatchSource.makeTimerSource(queue: controlQueue)
+                timer.schedule(deadline: .now() + 1, repeating: 1)
+                timer.setEventHandler { [weak self] in self?.drainSystemTrack(session, stopping: false) }
+                session.systemTimer = timer
+                timer.resume()
+            }
             startChunkTimer()
             logEvent("recording started session=\(session.id)")
         } catch {
+            if includesSystemAudio {
+                _ = try? startingSession?.systemTrack?.stop()
+                _ = try? recorder.stop(postrollSeconds: 0, context: "dual-input startup failed")
+            }
             if let failedRecoveryDirectory {
                 unprotectRecoveryDirectory(failedRecoveryDirectory)
             }
@@ -5100,11 +5165,13 @@ final class DictationAgent {
         hotkeyState.recordingEnded()
         updateInteractiveRecordingIndicator(false)
         setSessionProcessing(session, active: true)
-        session.requestFinish()
+        if !session.includesSystemAudio { session.requestFinish() }
         let trigger = triggerEventID.map(String.init) ?? "none"
         logEvent("recording stop requested session=\(session.id) reason=\(reason.rawValue) trigger_event=\(trigger)")
         chunkTimer?.cancel()
         chunkTimer = nil
+        session.systemTimer?.cancel()
+        session.systemTimer = nil
         let audioURL: URL
         do {
             guard let stoppedURL = try recorder.stop(
@@ -5112,6 +5179,11 @@ final class DictationAgent {
                 context: "stop session=\(session.id) reason=\(reason.rawValue)"
             ) else {
                 logEvent("recording stop outcome=no-audio session=\(session.id) reason=\(reason.rawValue)")
+                if session.includesSystemAudio {
+                    session.recordFailure("Microphone produced no final audio chunk.")
+                    drainSystemTrack(session, stopping: true)
+                    session.requestFinish()
+                }
                 finishSessionIfReady(session)
                 dictationASR.scheduleShutdown()
                 return
@@ -5123,6 +5195,11 @@ final class DictationAgent {
                     + "recovery=\(session.recoveryDirectory.path) error=\(error)"
             )
             playErrorSound()
+            if session.includesSystemAudio {
+                session.recordFailure("Microphone finalization failed: \(error)")
+                drainSystemTrack(session, stopping: true)
+                session.requestFinish()
+            }
             finishSessionIfReady(session)
             dictationASR.scheduleShutdown()
             return
@@ -5130,6 +5207,11 @@ final class DictationAgent {
         logEvent("recording stopped session=\(session.id) reason=\(reason.rawValue) path=\(audioURL.path)")
         playStopSound()
         processChunk(audioURL, session: session, final: true)
+        if session.includesSystemAudio {
+            drainSystemTrack(session, stopping: true)
+            session.requestFinish()
+            finishSessionIfReady(session)
+        }
     }
 
     private func startChunkTimer() {
@@ -5158,11 +5240,41 @@ final class DictationAgent {
         timer.resume()
     }
 
+    private func drainSystemTrack(_ session: InteractiveDictationSession, stopping: Bool) {
+        guard let track = session.systemTrack else { return }
+        do {
+            let chunks = try stopping ? track.stop() : track.takeCompleted()
+            for chunk in chunks {
+                processChunk(chunk.url, session: session, final: chunk.final, source: "System", offset: chunk.offset)
+            }
+            if let error = track.captureError { throw error }
+        } catch {
+            session.systemTimer?.cancel()
+            session.systemTimer = nil
+            guard !session.systemFailureReported else { return }
+            session.systemFailureReported = true
+            session.recordFailure("System audio capture failed: \(error)")
+            playErrorSound()
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "System audio capture failed"
+                alert.informativeText = "Microphone capture can continue. The transcript may be incomplete. Audio is preserved in \(session.recoveryDirectory.path).\n\(error)"
+                alert.runModal()
+            }
+            logEvent("system capture failed session=\(session.id) recovery=\(session.recoveryDirectory.path) error=\(error)")
+            try? Data(String(describing: error).utf8).write(to: session.recoveryDirectory.appendingPathComponent("system-error.txt"))
+        }
+    }
+
     private func processChunk(
         _ audioURL: URL,
         session: InteractiveDictationSession,
-        final: Bool
+        final: Bool,
+        source: String = "Mic",
+        offset suppliedOffset: Double? = nil
     ) {
+        let offset = suppliedOffset ?? session.microphoneOffset
+        if source == "Mic" { session.microphoneOffset += wavStats(audioURL)?.durationSeconds ?? 0 }
         let index = session.registerChunk()
         let sessionID = session.id
         logEvent("chunk queued session=\(sessionID) chunk=\(index) final=\(final) path=\(audioURL.path)")
@@ -5176,6 +5288,7 @@ final class DictationAgent {
                 logEvent("chunk audio session=\(sessionID) chunk=\(index) stats=unavailable final=\(final)")
             }
             var completedText = ""
+            var segments: [DictationTextSegment] = []
             do {
                 logEvent("chunk ASR wait begin session=\(sessionID) chunk=\(index)")
                 let waitResult = session.prepareGroup.wait(timeout: .now() + fluidSessionPrepareTimeoutSeconds)
@@ -5187,6 +5300,7 @@ final class DictationAgent {
                     final: final
                 )
                 completedText = sanitize(response.text ?? "")
+                segments = response.segments ?? []
                 let outcome = completedText.isEmpty ? "empty" : "transcribed"
                 logEvent(
                     "chunk outcome=\(outcome) session=\(sessionID) chunk=\(index) chars=\(completedText.count) "
@@ -5194,12 +5308,13 @@ final class DictationAgent {
                 )
             } catch {
                 playErrorSound()
+                if session.includesSystemAudio { session.recordFailure("\(source) chunk \(index) failed: \(error)") }
                 fputs(
                     "chunk outcome=transcription-failed session=\(sessionID) chunk=\(index) original=\(audioURL.path) error=\(error)\n",
                     stderr
                 )
             }
-            if let text = session.completeChunk(index: index, text: completedText) {
+            if let text = session.completeChunk(index: index, text: completedText, source: source, offset: offset, segments: segments) {
                 self.finishSession(session, text: text)
             }
         }
@@ -5212,10 +5327,20 @@ final class DictationAgent {
     }
 
     private func finishSession(_ session: InteractiveDictationSession, text rawText: String) {
-        let text = sanitize(rawText)
+        let text = session.includesSystemAudio
+            ? rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+            : sanitize(rawText)
         setSessionProcessing(session, active: false)
-        unprotectRecoveryDirectory(session.recoveryDirectory)
+        if !session.hasFailures { unprotectRecoveryDirectory(session.recoveryDirectory) }
         pruneRecoveryAfterSession()
+        if session.hasFailures && !session.systemFailureReported {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Dictation transcription is incomplete"
+                alert.informativeText = "A source chunk failed. The available text is inserted, and original audio remains in \(session.recoveryDirectory.path)."
+                alert.runModal()
+            }
+        }
         defer { dictationASR.scheduleShutdown() }
         defer {
             testCompletionGroup?.leave()
@@ -5430,7 +5555,11 @@ final class DictationAgent {
         let queueDelay = handlingUptime >= evidence.callbackUptimeNanoseconds
             ? handlingUptime - evidence.callbackUptimeNanoseconds
             : 0
-        let isPressed = evidence.hasShift && evidence.hasControl
+        let hasCommand = CGEventFlags(rawValue: evidence.rawFlags).contains(.maskCommand)
+        let dualChord = evidence.hasControl && hasCommand && !evidence.hasShift
+        let isPressed = activeSession?.includesSystemAudio == true
+            ? dualChord
+            : (evidence.hasShift && evidence.hasControl) || (activeSession == nil && dualChord)
         let previousPhase = hotkeyState.phase
         let sessionID = activeSession?.id ?? "none"
         let action = hotkeyState.chordChanged(isPressed: isPressed)
@@ -5448,7 +5577,7 @@ final class DictationAgent {
 
         switch action {
         case .startRecording:
-            startRecording(triggerEventID: evidence.id)
+            startRecording(triggerEventID: evidence.id, includesSystemAudio: dualChord)
         case .stopRecording:
             if let stopReason {
                 stopRecordingAndPaste(reason: stopReason, triggerEventID: evidence.id)
