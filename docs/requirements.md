@@ -91,3 +91,8 @@
 - Do not restart playback when the joined file becomes ready.
 - Report monotonic time from generation start to first audio readiness, VLC launch, and observed VLC playback.
 - Keep one speech behavior. Do not add fast and slow modes.
+
+## Deployment
+
+- After a successful activation, keep only the active runtime and the runtime it replaced, with its rollback backup.
+- Delete older runtimes and installation backups permanently, not to the Trash.

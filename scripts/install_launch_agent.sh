@@ -219,6 +219,13 @@ for _ in {1..100}; do
 done
 [[ "$STARTED" == 1 ]] || { echo "Installed app did not start" >&2; false; }
 trap - ERR
+# Keep only the active runtime and the one this activation replaced, with its rollback backup.
+for runtime in "$DATA_ROOT"/runtimes/*; do
+  [[ "$runtime" -ef "$ROOT" || "$runtime" -ef "${OLD_ROOT:-}" ]] || rm -rf -- "$runtime"
+done
+for backup in "$DATA_ROOT"/installation-backups/*; do
+  [[ "$backup" -ef "$BACKUP" ]] || rm -rf -- "$backup"
+done
 echo "Installed and started: $APP_DIR"
 echo "Previous installation preserved: $BACKUP"
 echo "Recordings, transcripts, and models remain in: $DATA_ROOT"
