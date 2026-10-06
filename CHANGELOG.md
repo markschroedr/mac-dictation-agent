@@ -1,8 +1,35 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-10-06
 
-- Recognize file transcriptions in 60-second windows with 15-second overlap. One 300-second batch previously peaked at 8.7 GB of MLX memory and crashed the shared ASR service on a 16 GB Mac.
+### Dictation
+
+- Added Control+Command dictation that records the microphone and system audio together and pastes timestamped `Mic` and `System` lines.
+- Kept every dictation in a durable recovery session, including failed and empty ones.
+- Kept the Fluid model loaded so a cold start no longer delays the first chunk.
+- Made start, stop, and error sounds a Settings toggle, off by default.
+
+### Transcription API
+
+- Served hotkey-dictation transcription on an OpenAI-compatible loopback endpoint that honors `response_format`.
+- Removed the MLX worker's separate transcription endpoint.
+
+### Continuous recording
+
+- Included system audio by default and asked for permission as soon as it is selected.
+- Preserved separate microphone and system Opus source tracks.
+- Added experimental per-source participant transcripts, matched by timing instead of echo cancellation.
+- Rotated continuous speech into segments after four minutes and held a process lock for the recorder's lifetime.
+- Kept the status menu responsive during stop and processing, and loaded menu data in the background with paged recent transcripts.
+
+### Files and speech
+
+- Recognized file transcriptions in 60-second windows with 15-second overlap. One 300-second batch previously peaked at 8.7 GB of MLX memory and crashed the shared ASR service on a 16 GB Mac.
+- Streamed progressive speech through one continuous VLC response.
+
+### Installation
+
+- Kept only the active runtime and the one it replaced after a successful activation.
 
 ## 0.1.3 - 2026-09-07
 

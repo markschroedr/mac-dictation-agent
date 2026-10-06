@@ -10,6 +10,18 @@ At stop, the app captures another 450 ms to preserve the last word. The helper a
 
 The last partial chunk is normally under 20 seconds, plus post-roll. This is not a hard latency limit: timer delays, model loading, or a processing backlog can increase the wait.
 
+## Microphone and system audio
+
+Hold Control+Command instead of Control+Shift to record your microphone and the Mac's system audio together, for example both sides of a call. Option locks recording the same way; press Control+Command again to stop.
+
+Both sources are transcribed in 20-second chunks during recording. The pasted text lists timestamped lines labelled `Mic` and `System` in time order. Speech that both sources pick up can appear twice; the app keeps it rather than risk dropping words.
+
+macOS asks for Screen & System Audio Recording permission on first use. If a source fails, the app pastes the available text and keeps the original audio in the recovery directory.
+
+## Sound effects
+
+Start, stop, and error sounds are off by default. Turn them on under **Settings → Sound Effects**.
+
 ## Recover a dictation
 
 Choose **Open Dictation Recovery** from the menu. Each session directory contains ordered `chunk-*.wav` files and an incremental `transcript.txt`. The files exist even when transcription returns no text or the app exits before completion.

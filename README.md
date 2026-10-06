@@ -23,6 +23,8 @@ The app isn't notarized, so macOS may warn you when opening it. The first use do
 
 For a longer recording, hold **Option** before releasing the shortcut. Press **Control+Shift** again to finish.
 
+To capture a call or video too, hold **Control+Command** instead. The app transcribes your microphone and the Mac's system audio and pastes both as labelled, timestamped lines.
+
 The app transcribes every 20 seconds while you speak. When you stop, it normally only has the last partial chunk left to process. The finished text appears in one paste. Recent transcripts are available from the menu if you need them again.
 
 On an M4 MacBook Air, a paced 5-minute recording finished about **0.6 seconds after release**. That's the wait for the transcription helper, before the macOS paste. [Measurements and method](docs/BENCHMARKS.md).
@@ -42,7 +44,7 @@ On an M4 MacBook Air, a paced 5-minute recording finished about **0.6 seconds af
 
 Dictation has no analytics or cloud transcription. Every dictation is saved locally with its transcript for 24 hours by default, including failed or empty sessions. Change the recovery window from the menu.
 
-Optional tools add file transcription, continuous recording, speaker labels, and local text-to-speech. Cloud voices are opt-in and send text to the provider you choose.
+A local transcription API on loopback serves the same model to your own scripts. Optional tools add file transcription, continuous recording, speaker labels, and local text-to-speech. Cloud voices are opt-in and send text to the provider you choose.
 
 [Privacy and storage](docs/PRIVACY.md) · [Optional tools and source installation](docs/USAGE.md)
 

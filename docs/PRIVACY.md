@@ -6,7 +6,7 @@ Mac Dictation Agent processes speech locally by default.
 
 The following workflows run on the Mac:
 
-- Push-to-talk dictation.
+- Push-to-talk dictation, including microphone plus system-audio dictation.
 - Audio and video file transcription.
 - Batch transcription.
 - Continuous microphone and optional system-audio transcription.
@@ -27,7 +27,7 @@ The app does not send microphone audio or transcripts to Inworld or xAI.
 
 ## Dictation recovery
 
-The app writes every interactive dictation directly to a durable session directory. Each directory contains ordered WAV chunks and an incremental `transcript.txt`:
+The app writes every interactive dictation directly to a durable session directory. Each directory contains ordered WAV chunks and an incremental `transcript.txt`. Mic + System sessions also keep `system-*.wav` chunks:
 
 ```txt
 ~/Library/Application Support/Mac Dictation Agent/recordings/recovery/
