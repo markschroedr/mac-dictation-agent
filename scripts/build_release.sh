@@ -21,7 +21,7 @@ for dependency in rsync ditto shasum; do
   fi
 done
 
-[[ ! -e "$ARCHIVE_PATH" && ! -e "$ARCHIVE_PATH.sha256" ]] || { echo "Release artifacts already exist; preserve them before rebuilding" >&2; exit 1; }
+[[ ! -e "$ARCHIVE_PATH" && ! -e "$ARCHIVE_PATH.sha256" && ! -e "$ARCHIVE_PATH.sig" ]] || { echo "Release artifacts already exist; preserve them before rebuilding" >&2; exit 1; }
 mkdir -p \
   "$PRODUCT_ROOT" \
   "$RUNTIME_ROOT/asr_worker" \
@@ -59,6 +59,7 @@ rsync -a \
   "$SOURCE_ROOT/vendor/permanent-transcriber/" "$RUNTIME_ROOT/vendor/permanent-transcriber/"
 rsync -a \
   "$SOURCE_ROOT/scripts/install_launch_agent.sh" \
+  "$SOURCE_ROOT/scripts/activate_update.sh" \
   "$SOURCE_ROOT/scripts/uninstall_launch_agent.sh" \
   "$SOURCE_ROOT/scripts/batch_transcribe.sh" \
   "$RUNTIME_ROOT/scripts/"
@@ -157,6 +158,13 @@ ditto -c -k --norsrc --keepParent "$PRODUCT_ROOT" "$ARCHIVE_PATH"
   cd "$DIST_ROOT"
   shasum -a 256 "$(basename "$ARCHIVE_PATH")" > "$(basename "$ARCHIVE_PATH").sha256"
 )
+
+if [[ -f "$HOME/.config/mac-dictation-agent-release/update-private.key" ]]; then
+  swift "$SOURCE_ROOT/scripts/release_signing.swift" sign "$ARCHIVE_PATH" "$ARCHIVE_PATH.sig"
+  echo "Ed25519 signature: $ARCHIVE_PATH.sig"
+else
+  echo "No release key: this contributor archive cannot be installed by the updater." >&2
+fi
 
 echo "release archive: $ARCHIVE_PATH"
 echo "checksum: $ARCHIVE_PATH.sha256"

@@ -85,22 +85,28 @@ cat > "$STAGED_APP/Contents/Info.plist" <<PLIST
 PLIST
 
 xattr -cr "$STAGED_APP" 2>/dev/null || true
-codesign \
-  --force \
-  --sign - \
-  --identifier "$BUNDLE_ID.fluid-asr" \
-  "$APP_HELPER" >/dev/null
-codesign \
-  --force \
-  --sign - \
-  --identifier "$BUNDLE_ID.system-audio" \
-  "$SYSTEM_AUDIO_HELPER" >/dev/null
-codesign \
-  --force \
-  --sign - \
-  --identifier "$BUNDLE_ID" \
-  --requirements "=designated => identifier \"$BUNDLE_ID\"" \
-  "$STAGED_APP" >/dev/null
+SIGNING_ROOT="$HOME/.config/mac-dictation-agent-release"
+SIGNING_ARGS=(--sign -)
+ANCHOR=""
+if [[ -f "$SIGNING_ROOT/identity" && -f "$SIGNING_ROOT/signing.keychain-db" ]]; then
+  IDENTITY="$(tr -d '[:space:]' < "$SIGNING_ROOT/identity")"
+  security unlock-keychain -p "$(<"$SIGNING_ROOT/keychain-password")" "$SIGNING_ROOT/signing.keychain-db"
+  # codesign needs the identity keychain in the search list even with --keychain.
+  KEYCHAINS=()
+  while IFS= read -r path; do
+    path="${path#*\"}"; path="${path%\"*}"
+    KEYCHAINS+=("$path")
+  done < <(security list-keychains -d user)
+  trap 'security list-keychains -d user -s "${KEYCHAINS[@]}"; echo "build workspace: $STAGING_ROOT"' EXIT
+  security list-keychains -d user -s "${KEYCHAINS[@]}" "$SIGNING_ROOT/signing.keychain-db"
+  SIGNING_ARGS=(--sign "$IDENTITY" --keychain "$SIGNING_ROOT/signing.keychain-db" --timestamp=none)
+  ANCHOR=" and certificate leaf = H\"$IDENTITY\""
+fi
+for entry in "$BUNDLE_ID.fluid-asr:$APP_HELPER" "$BUNDLE_ID.system-audio:$SYSTEM_AUDIO_HELPER" "$BUNDLE_ID:$STAGED_APP"; do
+  identifier="${entry%%:*}"; target="${entry#*:}"
+  codesign --force "${SIGNING_ARGS[@]}" --identifier "$identifier" \
+    --requirements "=designated => identifier \"$identifier\"$ANCHOR" "$target" >/dev/null
+done
 
 mkdir -p "$(dirname "$APP_DIR")"
 [[ ! -e "$APP_DIR" && ! -L "$APP_DIR" ]] || { echo "Build destination must be new: $APP_DIR" >&2; exit 1; }

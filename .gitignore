@@ -37,5 +37,12 @@ debug-audio/
 *.opus
 *.mov
 
+# Private signing material (release identities belong outside the repository)
+*.key
+*.p12
+*.pfx
+*.keychain
+*.keychain-db
+
 # macOS metadata
 .DS_Store

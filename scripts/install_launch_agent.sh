@@ -89,6 +89,11 @@ if [[ "${1:-}" != "--activate" ]]; then
   add_env MAC_DICTATION_FLUID_IDLE_SECONDS "${MAC_DICTATION_FLUID_IDLE_SECONDS:-86400}"
   add_env MAC_DICTATION_ASR_PORT "${MAC_DICTATION_ASR_PORT:-8766}"
   add_env MAC_DICTATION_LAUNCH_AGENT_LABEL "$LABEL"
+  add_env MAC_DICTATION_PLIST "$PLIST"
+  if [[ -n "${MAC_DICTATION_UPDATE_FEED_URL:-}" ]]; then add_env MAC_DICTATION_UPDATE_FEED_URL "$MAC_DICTATION_UPDATE_FEED_URL"; fi
+  if [[ "${MAC_DICTATION_UPDATE_E2E:-0}" == 1 && "$LABEL" == *.update-test && "$DATA_ROOT" == "${TMPDIR:-/tmp/}"* ]]; then
+    add_env MAC_DICTATION_UPDATE_E2E 1
+  fi
   plutil -insert RunAtLoad -bool true "$STAGED_PLIST"
   plutil -insert KeepAlive -bool true "$STAGED_PLIST"
   plutil -insert StandardOutPath -string "$DATA_ROOT/logs/agent.out.log" "$STAGED_PLIST"
@@ -179,6 +184,10 @@ if [[ -n "${OLD_TRANSCRIBER:-}" && -x "$OLD_TRANSCRIBER" ]]; then
     if [[ "$(plutil -extract "$field" raw -o - - <<< "$STATUS")" == true ]]; then RUNNING=1; fi
   done
   if [[ "$RUNNING" == 1 ]]; then
+    if [[ "${MAC_DICTATION_SAFE_UPDATE:-0}" == 1 ]]; then
+      echo "Continuous recording or processing is active; update refused without stopping it" >&2
+      exit 1
+    fi
     # The transcriber validates process identity and drains durable segments.
     PERMANENT_TRANSCRIBER_ROOT="$OLD_DATA/permanent-transcriber" "$OLD_TRANSCRIBER" stop
   fi

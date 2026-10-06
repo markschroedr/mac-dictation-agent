@@ -3358,6 +3358,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let tts: ClipboardTTSManager
     private let manualTranscriber: ManualAudioTranscriber
     private let permanentTranscriber: PermanentTranscriberController
+    let updater = AppUpdater()
     private let statusItem: NSStatusItem
     private let appStatusItem = NSMenuItem(title: "Ready", action: nil, keyEquivalent: "")
     private let quickTTSItem = NSMenuItem(title: "Quick Speak Clipboard…", action: #selector(speakClipboardQuick), keyEquivalent: "")
@@ -3591,6 +3592,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         startAtLoginItem.target = self
         menu.addItem(startAtLoginItem)
+        menu.addItem(updater.checkItem)
+        menu.addItem(updater.installItem)
+        updater.continuousBusy = { [weak self] in
+            guard let self else { return true }
+            return self.permanentOperationInFlight || self.isPermanentRecording || self.isPermanentProcessing
+                || self.permanentTranscriberStatus.isRunning || self.permanentTranscriberStatus.sourcePending
+        }
 
         menu.addItem(.separator())
 
@@ -3806,6 +3814,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     @objc private func togglePermanentTranscriber() {
         guard !permanentOperationInFlight else { return }
+        if updater.installing {
+            let alert = NSAlert()
+            alert.messageText = "Update in progress"
+            alert.informativeText = "Continuous recording is paused until the update finishes."
+            alert.runModal()
+            return
+        }
         let status = permanentTranscriberStatus
         // Processing is not recording: another Stop must not kill a draining worker.
         guard status.captureRunning || !status.isRunning else { return }
@@ -4532,6 +4547,7 @@ final class DictationAgent {
     private let stateLock = NSLock()
     private let controlQueue = DispatchQueue(label: "com.markschroedr.mac-dictation.control")
     private var isRecording = false
+    private var updateReserved = false
     private var activeSession: InteractiveDictationSession?
     private var processingSessionIDs: Set<String> = []
     private var protectedRecoveryDirectories: Set<String> = []
@@ -4549,6 +4565,7 @@ final class DictationAgent {
 
     @MainActor
     func run() {
+        if runUpdateE2EIfRequested() { return }
         if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--menu-preview" {
             runMenuPreview()
             return
@@ -4627,6 +4644,19 @@ final class DictationAgent {
         app.setActivationPolicy(.accessory)
         app.finishLaunching()
         statusMenu = StatusMenuController(asr: mlxASR, tts: tts)
+        statusMenu?.updater.reserveRecording = { [weak self] in
+            guard let self else { return false }
+            return self.controlQueue.sync {
+                self.stateLock.lock()
+                defer { self.stateLock.unlock() }
+                guard !self.isRecording, self.processingSessionIDs.isEmpty, !self.updateReserved else { return false }
+                self.updateReserved = true
+                return true
+            }
+        }
+        statusMenu?.updater.releaseRecording = { [weak self] in
+            self?.controlQueue.sync { self?.updateReserved = false }
+        }
         logEvent("Status menu installed.")
         transcriptionAPI.start()
         configureAccessibilityFeatures()
@@ -5081,6 +5111,15 @@ final class DictationAgent {
 
     private func startRecording(triggerEventID: UInt64? = nil, includesSystemAudio: Bool = false) {
         guard !isRecording else { return }
+        if updateReserved {
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Update in progress"
+                alert.informativeText = "Dictation is paused until the update finishes."
+                alert.runModal()
+            }
+            return
+        }
         var startingSession: InteractiveDictationSession?
         var failedRecoveryDirectory: URL?
         do {

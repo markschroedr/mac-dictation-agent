@@ -101,6 +101,24 @@ XAI_API_KEY=...
 
 The app also reads these keys from its process environment. The installer preserves `tts.env` during updates.
 
+## Updates
+
+The app checks GitHub for updates once a day. Choose **Check for Updates…** to check now, then **Update to …** to install and restart. Finish dictation and stop continuous recording first.
+
+The updater verifies the archive's Ed25519 signature before extracting or running its installer. A failed download, signature check, or preparation leaves the current app running. Activation preserves the previous runtime for rollback. Downloads use URLSession, not a browser, and do not add the quarantine attribute.
+
+Official builds use one self-made code-signing certificate. The first update from an ad-hoc build asks for permissions again; later builds keep the same code identity. The app remains unnotarized.
+
+### Release maintainers
+
+Run `bash scripts/setup_release_signing.sh` once. It creates the Ed25519 key pair and code-signing identity in `~/.config/mac-dictation-agent-release/`, using a dedicated keychain. No login keychain or trust settings are changed. Builds temporarily include the dedicated keychain in the search list and restore the previous list.
+
+Back up that **entire directory**, encrypted and offline, including the keychain password. Never regenerate the keys for a normal release. Losing either identity breaks update continuity. The updater's public key must match this release key.
+
+`bash scripts/build_release.sh` creates the ZIP, checksum, and raw 64-byte `.zip.sig` asset. Publish all three together. Without local signing material, contributor builds use ad-hoc signing and cannot produce authenticated updates.
+
+For an isolated update E2E run, build two signed versions and run `bash scripts/verify_update.sh OLD.zip NEW.zip`. It uses a temporary installation and its own launch label. Set `MAC_DICTATION_UPDATE_FEED_URL` only when testing a local feed.
+
 ## Install from source
 
 Requires Apple Command Line Tools, `uv`, and `ffmpeg`:

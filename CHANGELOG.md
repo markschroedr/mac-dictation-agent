@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added daily and manual update checks, with user-selected installation of Ed25519-signed release archives.
+- Signed official builds with one stable self-made certificate. The first update from ad-hoc signing requires granting Microphone, Accessibility, and Screen & System Audio Recording permissions again.
+- Prepared updates before restarting through a detached installer, preserving the previous runtime for rollback. Active dictation and continuous recording block installation.
+
 ## 0.2.0 - 2026-10-06
 
 ### Dictation
