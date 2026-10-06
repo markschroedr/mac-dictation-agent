@@ -2255,6 +2255,7 @@ enum ASRClientError: Error, CustomStringConvertible {
 final class FluidDictationClient {
     private let lock = NSRecursiveLock()
     private var process: Process?
+    private var modelReady = false
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
     private var errorHandle: FileHandle?
@@ -2382,6 +2383,15 @@ final class FluidDictationClient {
         }
         cancelScheduledShutdownLocked()
         try ensureProcessLocked()
+        if request.action == .transcribe && !modelReady {
+            let warmup = try self.request(
+                DictationServiceRequest(action: .warmup),
+                timeout: fluidWarmupTimeoutSeconds
+            )
+            if let error = warmup.error {
+                throw ASRClientError.workerError(error)
+            }
+        }
         guard let inputHandle, let outputHandle else {
             throw ASRClientError.requestFailed("Fluid ASR pipes are unavailable")
         }
@@ -2395,6 +2405,9 @@ final class FluidDictationClient {
             throw ASRClientError.requestFailed(
                 "Fluid ASR response mismatch expected=\(request.id) actual=\(response.id)"
             )
+        }
+        if request.action == .warmup && response.error == nil {
+            modelReady = true
         }
         return response
     }
@@ -2531,6 +2544,7 @@ final class FluidDictationClient {
         outputHandle = nil
         errorHandle = nil
         process = nil
+        modelReady = false
         generation += 1
     }
 

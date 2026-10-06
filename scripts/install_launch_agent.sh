@@ -85,6 +85,8 @@ if [[ "${1:-}" != "--activate" ]]; then
   add_env MAC_DICTATION_SUPERTONIC_TTS_SERVICE_BIN "$ROOT/supertonic_worker/.venv/bin/supertonic-tts-worker"
   add_env MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT "$TTS_ROOT"
   add_env MAC_DICTATION_TTS_IDLE_SECONDS "${MAC_DICTATION_TTS_IDLE_SECONDS:-300}"
+  # A cold Fluid start can recompile the ANE encoder for 20-90 s; keep it resident.
+  add_env MAC_DICTATION_FLUID_IDLE_SECONDS "${MAC_DICTATION_FLUID_IDLE_SECONDS:-86400}"
   add_env MAC_DICTATION_ASR_PORT "${MAC_DICTATION_ASR_PORT:-8766}"
   add_env MAC_DICTATION_LAUNCH_AGENT_LABEL "$LABEL"
   plutil -insert RunAtLoad -bool true "$STAGED_PLIST"
