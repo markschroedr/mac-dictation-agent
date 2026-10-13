@@ -1,3 +1,4 @@
+import DictationServiceProtocol
 import Foundation
 import Network
 
@@ -245,7 +246,7 @@ private func headerValue(_ name: String, in headers: String) -> String? {
 private struct HealthBody: Encodable {
     let ok = true
     let service = "mac-dictation-agent"
-    let backend = "fluid-audio-parakeet-v3"
+    let backend = "fluid-audio-\(DictationModel.current.rawValue)"
 }
 
 private struct TranscriptionBody: Encodable {

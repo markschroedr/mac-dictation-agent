@@ -5,12 +5,14 @@ import Foundation
 
 private final class FluidASRService {
     private let modelRoot: URL
+    private let model: DictationModel
     private var manager: AsrManager?
     private var activeSessionID: String?
     private var responseCache: [Int: DictationServiceResponse] = [:]
 
-    init(modelRoot: URL) {
+    init(modelRoot: URL, model: DictationModel) {
         self.modelRoot = modelRoot
+        self.model = model
     }
 
     func handle(_ request: DictationServiceRequest) async -> DictationServiceResponse {
@@ -53,15 +55,23 @@ private final class FluidASRService {
         let models = try await AsrModels.downloadAndLoad(
             to: modelRoot,
             configuration: configuration,
-            version: .v3,
+            version: asrVersion,
             encoderPrecision: .int8,
             encoderComputeUnits: .all
         )
         let loadedManager = AsrManager(config: .default)
         try await loadedManager.loadModels(models)
         manager = loadedManager
-        log("model ready seconds=\(format(started.duration(to: .now))) root=\(modelRoot.path)")
+        log("model ready model=\(model.rawValue) seconds=\(format(started.duration(to: .now))) root=\(modelRoot.path)")
         return loadedManager
+    }
+
+    private var asrVersion: AsrModelVersion {
+        switch model {
+        case .v3: return .v3
+        case .ultra: return .ultra
+        case .phonon2: return .phonon2
+        }
     }
 
     private func timedSegments(_ result: ASRResult) -> [DictationTextSegment] {
@@ -194,7 +204,9 @@ private enum FluidDictationServiceMain {
         let modelRoot = ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_MODEL_ROOT"].map {
             URL(fileURLWithPath: $0)
         } ?? defaultRoot
-        let service = FluidASRService(modelRoot: modelRoot)
+        let model = ProcessInfo.processInfo.environment[DictationModel.environmentKey]
+            .flatMap(DictationModel.init(rawValue:)) ?? .defaultModel
+        let service = FluidASRService(modelRoot: modelRoot, model: model)
         let decoder = JSONDecoder()
 
         while let line = readLine(strippingNewline: true) {

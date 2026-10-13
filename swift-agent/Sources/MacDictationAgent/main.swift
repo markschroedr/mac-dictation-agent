@@ -92,6 +92,7 @@ let audioInputDefaultsKey = "audioInputName"
 let retainSuccessfulAudioDefaultsKey = "retainSuccessfulDictationAudio"
 let recoveryRetentionHoursDefaultsKey = "dictationRecoveryRetentionHours"
 let soundEffectsDefaultsKey = "soundEffectsEnabled"
+let dictationModelDefaultsKey = "dictationModel"
 let defaultRecoveryRetentionHours = 24
 let launchAgentLabel = ProcessInfo.processInfo.environment["MAC_DICTATION_LAUNCH_AGENT_LABEL"]
     ?? "com.markschroedr.mac-dictation"
@@ -385,6 +386,21 @@ enum TTSLanguage: String, CaseIterable, Sendable {
 
     static func setCurrent(_ language: TTSLanguage) {
         UserDefaults.standard.set(language.rawValue, forKey: defaultsKey)
+    }
+}
+
+extension DictationModel {
+    var displayName: String {
+        switch self {
+        case .v3: return "Parakeet v3"
+        case .ultra: return "Parakeet Ultra"
+        case .phonon2: return "Phonon-2 (English only)"
+        }
+    }
+
+    static var current: DictationModel {
+        UserDefaults.standard.string(forKey: dictationModelDefaultsKey).flatMap(DictationModel.init(rawValue:))
+            ?? .defaultModel
     }
 }
 
@@ -2263,6 +2279,8 @@ final class FluidDictationClient {
     private var errorHandle: FileHandle?
     private var idleShutdownWorkItem: DispatchWorkItem?
     private var generation = 0
+    private var launchedModel: DictationModel?
+    private var lastSessionID: String?
 
     func warmupSync() {
         logEvent("Fluid ASR warmup begin")
@@ -2385,6 +2403,13 @@ final class FluidDictationClient {
             generation += 1
         }
         cancelScheduledShutdownLocked()
+        // Switch models only when a request starts a new session, so one dictation never mixes models.
+        if request.action != .shutdown, request.sessionID == nil || request.sessionID != lastSessionID,
+           let launchedModel, launchedModel != DictationModel.current, process?.isRunning == true {
+            logEvent("Fluid ASR model change from=\(launchedModel.rawValue) to=\(DictationModel.current.rawValue)")
+            shutdownLocked()
+        }
+        if let sessionID = request.sessionID { lastSessionID = sessionID }
         try ensureProcessLocked()
         if request.action == .transcribe && !modelReady {
             let warmup = try self.request(
@@ -2444,15 +2469,18 @@ final class FluidDictationClient {
         serviceProcess.standardError = serviceErrorHandle
         var environment = ProcessInfo.processInfo.environment
         environment["MAC_DICTATION_FLUID_MODEL_ROOT"] = fluidModelRoot.path
+        let model = DictationModel.current
+        environment[DictationModel.environmentKey] = model.rawValue
         serviceProcess.environment = environment
         try serviceProcess.run()
+        launchedModel = model
 
         process = serviceProcess
         inputHandle = inputPipe.fileHandleForWriting
         outputHandle = outputPipe.fileHandleForReading
         errorHandle = serviceErrorHandle
         generation += 1
-        logEvent("Fluid ASR service launched pid=\(serviceProcess.processIdentifier)")
+        logEvent("Fluid ASR service launched pid=\(serviceProcess.processIdentifier) model=\(model.rawValue)")
     }
 
     private func readLine(from fileDescriptor: Int32, timeout: Double) throws -> Data {
@@ -3384,6 +3412,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let microphoneItem = NSMenuItem(title: "Dictation Microphone", action: nil, keyEquivalent: "")
     private let recoveryRetentionItem = NSMenuItem(title: "Recovery Audio Retention", action: nil, keyEquivalent: "")
     private var recoveryRetentionItems: [Int: NSMenuItem] = [:]
+    private let dictationModelItem = NSMenuItem(title: "Dictation Model", action: nil, keyEquivalent: "")
+    private var dictationModelItems: [DictationModel: NSMenuItem] = [:]
+    var onDictationModelChange: (() -> Void)?
     private let ttsStatusItem = NSMenuItem(title: "TTS: Idle", action: nil, keyEquivalent: "")
     private var ttsActionItems: [TTSProvider: NSMenuItem] = [:]
     private var ttsLanguageItems: [TTSLanguage: NSMenuItem] = [:]
@@ -3562,6 +3593,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let settingsMenu = NSMenu()
         settingsMenu.addItem(microphoneItem)
 
+        let dictationModelMenu = NSMenu()
+        for model in DictationModel.allCases {
+            let item = NSMenuItem(title: model.displayName, action: #selector(selectDictationModel), keyEquivalent: "")
+            item.target = self
+            item.representedObject = model.rawValue
+            dictationModelMenu.addItem(item)
+            dictationModelItems[model] = item
+        }
+        dictationModelItem.submenu = dictationModelMenu
+        settingsMenu.addItem(dictationModelItem)
+        updateDictationModelState()
+
         let recoveryRetentionMenu = NSMenu()
         for choice in RecoveryRetentionPreference.choices {
             let item = NSMenuItem(title: choice.title, action: #selector(selectRecoveryRetention), keyEquivalent: "")
@@ -3668,6 +3711,22 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func toggleStartAtLogin() {
         setStartAtLogin(enabled: !isStartAtLoginEnabled())
         updateStartAtLoginState()
+    }
+
+    @objc private func selectDictationModel(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let model = DictationModel(rawValue: raw) else { return }
+        UserDefaults.standard.set(model.rawValue, forKey: dictationModelDefaultsKey)
+        updateDictationModelState()
+        logEvent("dictation model selected model=\(model.rawValue)")
+        onDictationModelChange?()
+    }
+
+    private func updateDictationModelState() {
+        let current = DictationModel.current
+        for (model, item) in dictationModelItems {
+            item.state = model == current ? .on : .off
+        }
+        dictationModelItem.title = "Dictation Model — \(current.displayName)"
     }
 
     @objc private func selectRecoveryRetention(_ sender: NSMenuItem) {
@@ -4652,6 +4711,21 @@ final class DictationAgent {
                 guard !self.isRecording, self.processingSessionIDs.isEmpty, !self.updateReserved else { return false }
                 self.updateReserved = true
                 return true
+            }
+        }
+        // Load a newly selected model in the background so the next dictation does not wait for
+        // its download and compilation. A running session keeps its model; the switch happens at the next session.
+        statusMenu?.onDictationModelChange = { [weak self] in
+            guard let self else { return }
+            let idle = self.controlQueue.sync {
+                self.stateLock.lock()
+                defer { self.stateLock.unlock() }
+                return !self.isRecording && self.processingSessionIDs.isEmpty
+            }
+            guard idle else { return }
+            DispatchQueue.global(qos: .utility).async {
+                self.dictationASR.warmupSync()
+                self.dictationASR.scheduleShutdown()
             }
         }
         statusMenu?.updater.releaseRecording = { [weak self] in

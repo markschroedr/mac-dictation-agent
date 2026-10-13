@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
@@ -12,7 +12,8 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/FluidInference/FluidAudio.git",
-            revision: "5fc19fcde8aff5970ab18c974b109891479384c2"
+            revision: "793a2c5a0e99705a55fefbad00e65ca684329349",
+            traits: []
         )
     ],
     targets: [
