@@ -24,7 +24,6 @@ done
 [[ ! -e "$ARCHIVE_PATH" && ! -e "$ARCHIVE_PATH.sha256" && ! -e "$ARCHIVE_PATH.sig" ]] || { echo "Release artifacts already exist; preserve them before rebuilding" >&2; exit 1; }
 mkdir -p \
   "$PRODUCT_ROOT" \
-  "$RUNTIME_ROOT/asr_worker" \
   "$RUNTIME_ROOT/supertonic_worker" \
   "$RUNTIME_ROOT/vendor/permanent-transcriber" \
   "$RUNTIME_ROOT/scripts" \
@@ -42,12 +41,6 @@ MAC_DICTATION_APP_DIR="$PRODUCT_ROOT/MacDictationAgent.app" \
 rsync -a \
   --exclude '.venv' \
   --exclude '__pycache__' \
-  --exclude 'tests' \
-  --exclude '*.log' \
-  "$SOURCE_ROOT/asr_worker/" "$RUNTIME_ROOT/asr_worker/"
-rsync -a \
-  --exclude '.venv' \
-  --exclude '__pycache__' \
   --exclude '*.log' \
   "$SOURCE_ROOT/supertonic_worker/" "$RUNTIME_ROOT/supertonic_worker/"
 rsync -a \
@@ -62,6 +55,7 @@ rsync -a \
   "$SOURCE_ROOT/scripts/activate_update.sh" \
   "$SOURCE_ROOT/scripts/uninstall_launch_agent.sh" \
   "$SOURCE_ROOT/scripts/batch_transcribe.sh" \
+  "$SOURCE_ROOT/scripts/batch_transcribe.py" \
   "$RUNTIME_ROOT/scripts/"
 rsync -a \
   "$SOURCE_ROOT/LICENSE" \

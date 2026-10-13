@@ -1,7 +1,7 @@
 """Real encoder → permanent worker → shared ASR → source transcript journey.
 
-Run with the installed permanent-transcriber Python. Set MAC_DICTATION_AGENT_ROOT
-when the shared ASR service is not already running. Artifacts remain in /tmp.
+Run with the permanent-transcriber Python while Mac Dictation Agent is running.
+Set MAC_DICTATION_API_PORT to use an isolated app endpoint. Artifacts remain in /tmp.
 """
 from __future__ import annotations
 

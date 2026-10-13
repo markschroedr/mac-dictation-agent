@@ -44,7 +44,7 @@ MAC_DICTATION_MODEL_ROOT="$DATA_ROOT/models" \
 MAC_DICTATION_APP_DIR="$APP_DIR" \
 MAC_DICTATION_PLIST="$PLIST" \
 MAC_DICTATION_LAUNCH_AGENT_LABEL="com.markschroedr.mac-dictation.release-test" \
-MAC_DICTATION_ASR_PORT="18766" \
+MAC_DICTATION_API_PORT="18767" \
 MAC_DICTATION_PREBUILT_APP="$PACKAGE_ROOT/MacDictationAgent.app" \
 MAC_DICTATION_ACTIVATE="0" \
 MAC_DICTATION_WARM_MODELS="0" \
@@ -57,7 +57,7 @@ MAC_DICTATION_INSTALL_EXTRAS="0" \
 APP_DIR="$STAGE/MacDictationAgent.app"
 PLIST="$STAGE/launch.plist"
 
-if [[ -d "$STAGE/asr_worker/.venv" ]]; then
+if [[ -d "$STAGE/vendor/permanent-transcriber/.venv" || -d "$STAGE/supertonic_worker/.venv" ]]; then
   echo "core installation created an optional Python environment" >&2
   exit 1
 fi

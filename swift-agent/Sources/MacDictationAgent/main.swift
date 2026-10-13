@@ -22,7 +22,6 @@ let applicationSupportRoot = FileManager.default.urls(for: .applicationSupportDi
 let dataRoot = ProcessInfo.processInfo.environment["MAC_DICTATION_DATA_ROOT"].map {
     URL(fileURLWithPath: $0)
 } ?? applicationSupportRoot
-let workerDir = agentRoot.appendingPathComponent("asr_worker")
 let logDir = dataRoot.appendingPathComponent("logs")
 let debugAudioDir = dataRoot.appendingPathComponent("recordings/debug")
 let dictationRecoveryDir = dataRoot.appendingPathComponent("recordings/recovery")
@@ -71,19 +70,13 @@ let supertonicTTSModelRoot = ProcessInfo.processInfo.environment[
 )
 let permanentTranscriberTranscriptRoot = permanentTranscriberStorageDir.appendingPathComponent("transcripts")
 let permanentTranscriberModeDefaultsKey = "permanentTranscriberMode"
-let asrPort = ProcessInfo.processInfo.environment["MAC_DICTATION_ASR_PORT"] ?? "8766"
-let asrBaseURL = "http://127.0.0.1:\(asrPort)"
 let chunkSeconds = 20.0
 let finalChunkPostrollSeconds = 0.45
-let asrIdleShutdownSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_ASR_IDLE_SECONDS"] ?? "") ?? 60.0
-let asrWarmupTimeoutSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_ASR_WARMUP_TIMEOUT_SECONDS"] ?? "") ?? 60.0
-let asrTranscribeTimeoutFloorSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_ASR_TRANSCRIBE_TIMEOUT_FLOOR_SECONDS"] ?? "") ?? 12.0
-let asrTranscribeTimeoutCeilingSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_ASR_TRANSCRIBE_TIMEOUT_CEILING_SECONDS"] ?? "") ?? 30.0
 let fluidIdleShutdownSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_IDLE_SECONDS"] ?? "") ?? 60.0
 let localTTSIdleShutdownSeconds = Double(
     ProcessInfo.processInfo.environment["MAC_DICTATION_TTS_IDLE_SECONDS"] ?? ""
 ) ?? 300.0
-let fluidWarmupTimeoutSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_WARMUP_TIMEOUT_SECONDS"] ?? "") ?? 600.0
+let fluidWarmupTimeoutSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_WARMUP_TIMEOUT_SECONDS"] ?? "") ?? 60.0
 let fluidSessionPrepareTimeoutSeconds = Double(
     ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_SESSION_PREPARE_TIMEOUT_SECONDS"] ?? ""
 ) ?? (fluidWarmupTimeoutSeconds + 10.0)
@@ -2269,636 +2262,7 @@ enum ASRClientError: Error, CustomStringConvertible {
     }
 }
 
-final class FluidDictationClient {
-    private let lock = NSRecursiveLock()
-    private var process: Process?
-    private var modelReady = false
-    private var inputHandle: FileHandle?
-    private var outputHandle: FileHandle?
-    private var errorHandle: FileHandle?
-    private var idleShutdownWorkItem: DispatchWorkItem?
-    private var generation = 0
-    private var launchedModel: DictationModel?
-    private var lastSessionID: String?
 
-    func warmupSync() {
-        logEvent("Fluid ASR warmup begin")
-        let started = CFAbsoluteTimeGetCurrent()
-        do {
-            _ = try request(
-                DictationServiceRequest(action: .warmup),
-                timeout: fluidWarmupTimeoutSeconds
-            )
-            logEvent("Fluid ASR warmup end request=\(String(format: "%.3f", CFAbsoluteTimeGetCurrent() - started))s")
-        } catch {
-            logEvent("Fluid ASR warmup failed error=\(error)")
-            restartService(reason: "warmup failed")
-        }
-    }
-
-    func resetSession(_ sessionID: String) {
-        logEvent("Fluid ASR reset begin session=\(sessionID)")
-        do {
-            _ = try request(
-                DictationServiceRequest(action: .resetSession, sessionID: sessionID),
-                timeout: 8
-            )
-        } catch {
-            logEvent("Fluid ASR reset failed session=\(sessionID) error=\(error)")
-            restartService(reason: "reset failed")
-        }
-        logEvent("Fluid ASR reset end session=\(sessionID)")
-    }
-
-    func transcribe(
-        sessionID: String,
-        chunkIndex: Int,
-        audioURL: URL,
-        final: Bool = false
-    ) throws -> TranscriptionResponse {
-        logEvent("Fluid ASR request begin session=\(sessionID) chunk=\(chunkIndex) final=\(final)")
-        let requestBody = DictationServiceRequest(
-            action: .transcribe,
-            sessionID: sessionID,
-            chunkIndex: chunkIndex,
-            path: audioURL.path,
-            final: final
-        )
-        var lastError: Error?
-        for attempt in 1...2 {
-            let started = CFAbsoluteTimeGetCurrent()
-            do {
-                let response = try request(requestBody, timeout: fluidTranscribeTimeoutSeconds)
-                if let error = response.error {
-                    throw ASRClientError.workerError(error)
-                }
-                let elapsed = CFAbsoluteTimeGetCurrent() - started
-                logEvent(
-                    "Fluid ASR request end session=\(sessionID) chunk=\(chunkIndex) "
-                        + "attempt=\(attempt) total=\(String(format: "%.3f", elapsed))s"
-                )
-                return TranscriptionResponse(
-                    segments: response.segments,
-                    text: response.text,
-                    raw_text: response.rawText,
-                    duration_seconds: response.durationSeconds,
-                    recognize_seconds: response.recognizeSeconds,
-                    speedup: response.speedup,
-                    error: response.error
-                )
-            } catch {
-                lastError = error
-                logEvent(
-                    "Fluid ASR request failed session=\(sessionID) chunk=\(chunkIndex) "
-                        + "attempt=\(attempt) error=\(error)"
-                )
-                restartService(reason: "transcribe request failed")
-            }
-        }
-        throw lastError ?? ASRClientError.requestFailed("Fluid ASR failed without an error")
-    }
-
-    func scheduleShutdown() {
-        lock.lock()
-        cancelScheduledShutdownLocked()
-        generation += 1
-        let expectedGeneration = generation
-        let item = DispatchWorkItem { [weak self] in
-            self?.shutdownIfIdle(expectedGeneration: expectedGeneration)
-        }
-        idleShutdownWorkItem = item
-        lock.unlock()
-        DispatchQueue.global(qos: .utility).asyncAfter(
-            deadline: .now() + fluidIdleShutdownSeconds,
-            execute: item
-        )
-        logEvent("Fluid ASR idle shutdown scheduled after \(String(format: "%.0f", fluidIdleShutdownSeconds))s")
-    }
-
-    func cancelScheduledShutdownForActivity() {
-        lock.lock()
-        cancelScheduledShutdownLocked()
-        generation += 1
-        lock.unlock()
-    }
-
-    func shutdown() {
-        lock.lock()
-        defer { lock.unlock() }
-        if idleShutdownWorkItem != nil {
-            generation += 1
-        }
-        cancelScheduledShutdownLocked()
-        shutdownLocked()
-    }
-
-    private func request(
-        _ request: DictationServiceRequest,
-        timeout: Double
-    ) throws -> DictationServiceResponse {
-        lock.lock()
-        defer { lock.unlock() }
-        if idleShutdownWorkItem != nil {
-            generation += 1
-        }
-        cancelScheduledShutdownLocked()
-        // Switch models only when a request starts a new session, so one dictation never mixes models.
-        if request.action != .shutdown, request.sessionID == nil || request.sessionID != lastSessionID,
-           let launchedModel, launchedModel != DictationModel.current, process?.isRunning == true {
-            logEvent("Fluid ASR model change from=\(launchedModel.rawValue) to=\(DictationModel.current.rawValue)")
-            shutdownLocked()
-        }
-        if let sessionID = request.sessionID { lastSessionID = sessionID }
-        try ensureProcessLocked()
-        if request.action == .transcribe && !modelReady {
-            let warmup = try self.request(
-                DictationServiceRequest(action: .warmup),
-                timeout: fluidWarmupTimeoutSeconds
-            )
-            if let error = warmup.error {
-                throw ASRClientError.workerError(error)
-            }
-        }
-        guard let inputHandle, let outputHandle else {
-            throw ASRClientError.requestFailed("Fluid ASR pipes are unavailable")
-        }
-
-        var data = try JSONEncoder().encode(request)
-        data.append(0x0A)
-        try inputHandle.write(contentsOf: data)
-        let responseData = try readLine(from: outputHandle.fileDescriptor, timeout: timeout)
-        let response = try JSONDecoder().decode(DictationServiceResponse.self, from: responseData)
-        guard response.id == request.id else {
-            throw ASRClientError.requestFailed(
-                "Fluid ASR response mismatch expected=\(request.id) actual=\(response.id)"
-            )
-        }
-        if request.action == .warmup && response.error == nil {
-            modelReady = true
-        }
-        return response
-    }
-
-    private func ensureProcessLocked() throws {
-        if let process, process.isRunning {
-            return
-        }
-        clearProcessLocked()
-        guard FileManager.default.isExecutableFile(atPath: fluidServiceExecutable.path) else {
-            throw ASRClientError.requestFailed(
-                "Fluid ASR service is missing or not executable: \(fluidServiceExecutable.path)"
-            )
-        }
-
-        try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: fluidModelRoot, withIntermediateDirectories: true)
-        let serviceLogURL = logDir.appendingPathComponent("fluid-dictation-service.log")
-        if !FileManager.default.fileExists(atPath: serviceLogURL.path) {
-            FileManager.default.createFile(atPath: serviceLogURL.path, contents: nil)
-        }
-        let serviceErrorHandle = try FileHandle(forWritingTo: serviceLogURL)
-        try serviceErrorHandle.seekToEnd()
-
-        let inputPipe = Pipe()
-        let outputPipe = Pipe()
-        let serviceProcess = Process()
-        serviceProcess.executableURL = fluidServiceExecutable
-        serviceProcess.standardInput = inputPipe
-        serviceProcess.standardOutput = outputPipe
-        serviceProcess.standardError = serviceErrorHandle
-        var environment = ProcessInfo.processInfo.environment
-        environment["MAC_DICTATION_FLUID_MODEL_ROOT"] = fluidModelRoot.path
-        let model = DictationModel.current
-        environment[DictationModel.environmentKey] = model.rawValue
-        serviceProcess.environment = environment
-        try serviceProcess.run()
-        launchedModel = model
-
-        process = serviceProcess
-        inputHandle = inputPipe.fileHandleForWriting
-        outputHandle = outputPipe.fileHandleForReading
-        errorHandle = serviceErrorHandle
-        generation += 1
-        logEvent("Fluid ASR service launched pid=\(serviceProcess.processIdentifier) model=\(model.rawValue)")
-    }
-
-    private func readLine(from fileDescriptor: Int32, timeout: Double) throws -> Data {
-        let deadline = CFAbsoluteTimeGetCurrent() + timeout
-        var accumulated = Data()
-        var buffer = [UInt8](repeating: 0, count: 65_536)
-
-        while accumulated.count <= 1_048_576 {
-            let remaining = deadline - CFAbsoluteTimeGetCurrent()
-            guard remaining > 0 else {
-                throw ASRClientError.requestFailed("Fluid ASR response timed out")
-            }
-            var descriptor = pollfd(fd: fileDescriptor, events: Int16(POLLIN), revents: 0)
-            let milliseconds = Int32(min(Double(Int32.max), ceil(remaining * 1000)))
-            let pollResult = Darwin.poll(&descriptor, 1, milliseconds)
-            if pollResult < 0 && errno == EINTR {
-                continue
-            }
-            guard pollResult > 0 else {
-                throw ASRClientError.requestFailed(
-                    pollResult == 0 ? "Fluid ASR response timed out" : "Fluid ASR poll failed errno=\(errno)"
-                )
-            }
-            let bytesRead = buffer.withUnsafeMutableBytes { bytes in
-                Darwin.read(fileDescriptor, bytes.baseAddress, bytes.count)
-            }
-            guard bytesRead > 0 else {
-                throw ASRClientError.requestFailed("Fluid ASR service closed its response pipe")
-            }
-            accumulated.append(buffer, count: bytesRead)
-            if let newline = accumulated.firstIndex(of: 0x0A) {
-                return Data(accumulated[..<newline])
-            }
-        }
-        throw ASRClientError.requestFailed("Fluid ASR response exceeded 1 MB")
-    }
-
-    private func restartService(reason: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        logEvent("Fluid ASR service restart reason=\(reason)")
-        terminateProcessLocked()
-    }
-
-    private func shutdownIfIdle(expectedGeneration: Int) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard generation == expectedGeneration else {
-            logEvent("Fluid ASR idle shutdown skipped; generation changed")
-            return
-        }
-        idleShutdownWorkItem = nil
-        shutdownLocked()
-    }
-
-    private func shutdownLocked() {
-        guard let process, process.isRunning else {
-            clearProcessLocked()
-            return
-        }
-        logEvent("Fluid ASR service shutdown requested pid=\(process.processIdentifier)")
-        do {
-            _ = try request(DictationServiceRequest(action: .shutdown), timeout: 10)
-        } catch {
-            logEvent("Fluid ASR graceful shutdown failed error=\(error)")
-        }
-        if process.isRunning {
-            process.terminate()
-        }
-        clearProcessLocked()
-    }
-
-    private func terminateProcessLocked() {
-        if let process, process.isRunning {
-            let pid = process.processIdentifier
-            process.terminate()
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
-                if process.isRunning {
-                    logEvent("Fluid ASR service force killing pid=\(pid)")
-                    _ = Darwin.kill(pid, SIGKILL)
-                }
-            }
-        }
-        clearProcessLocked()
-    }
-
-    private func clearProcessLocked() {
-        try? inputHandle?.close()
-        try? outputHandle?.close()
-        try? errorHandle?.close()
-        inputHandle = nil
-        outputHandle = nil
-        errorHandle = nil
-        process = nil
-        modelReady = false
-        generation += 1
-    }
-
-    private func cancelScheduledShutdownLocked() {
-        idleShutdownWorkItem?.cancel()
-        idleShutdownWorkItem = nil
-    }
-}
-
-extension FluidDictationClient: @unchecked Sendable {}
-
-final class MLXASRClient {
-    private var workerProcess: Process?
-    private let lifecycleLock = NSLock()
-    private var warmupGroup: DispatchGroup?
-    private var idleShutdownWorkItem: DispatchWorkItem?
-    private var workerGeneration = 0
-
-    func ensureRunning() {
-        cancelScheduledShutdownForActivity()
-        lifecycleLock.lock()
-        defer { lifecycleLock.unlock() }
-
-        if health() {
-            logEvent("ASR health ok")
-            return
-        }
-
-        let started = CFAbsoluteTimeGetCurrent()
-        if let process = workerProcess, process.isRunning {
-            logEvent("ASR worker already running; waiting for health pid=\(process.processIdentifier)")
-        } else {
-            logEvent("ASR worker cold start begin")
-            startWorker()
-        }
-
-        for _ in 0..<300 {
-            if health() {
-                let elapsed = CFAbsoluteTimeGetCurrent() - started
-                logEvent("ASR worker health ready after \(String(format: "%.3f", elapsed))s")
-                return
-            }
-            if let process = workerProcess, !process.isRunning {
-                logEvent("ASR worker exited before health pid=\(process.processIdentifier) status=\(process.terminationStatus)")
-                workerProcess = nil
-                workerGeneration += 1
-                logEvent("ASR worker cold start begin")
-                startWorker()
-            }
-            Thread.sleep(forTimeInterval: 0.1)
-        }
-        let elapsed = CFAbsoluteTimeGetCurrent() - started
-        logEvent("ASR worker health not ready after \(String(format: "%.3f", elapsed))s")
-    }
-
-    func warmup() {
-        let group = DispatchGroup()
-        lifecycleLock.lock()
-        warmupGroup = group
-        lifecycleLock.unlock()
-
-        group.enter()
-        DispatchQueue.global(qos: .utility).async {
-            self.warmupSync()
-            group.leave()
-            self.lifecycleLock.lock()
-            if self.warmupGroup === group {
-                self.warmupGroup = nil
-            }
-            self.lifecycleLock.unlock()
-        }
-    }
-
-    func warmupSync() {
-        logEvent("ASR warmup begin")
-        ensureRunning()
-        let started = CFAbsoluteTimeGetCurrent()
-        do {
-            _ = try postJSON(path: "/warmup", body: Data(), timeout: asrWarmupTimeoutSeconds)
-        } catch {
-            logEvent("ASR warmup failed error=\(error)")
-            restartWorker(reason: "warmup failed")
-        }
-        let elapsed = CFAbsoluteTimeGetCurrent() - started
-        logEvent("ASR warmup end request=\(String(format: "%.3f", elapsed))s")
-    }
-
-    func resetSession(_ sessionID: String) {
-        logEvent("ASR reset begin session=\(sessionID)")
-        ensureRunning()
-        let body = try! JSONSerialization.data(withJSONObject: ["session_id": sessionID])
-        do {
-            _ = try postJSON(path: "/reset-session", body: body, timeout: 8)
-        } catch {
-            logEvent("ASR reset failed session=\(sessionID) error=\(error)")
-            restartWorker(reason: "reset failed")
-        }
-        logEvent("ASR reset end session=\(sessionID)")
-    }
-
-    func transcribe(sessionID: String, chunkIndex: Int, audioURL: URL, final: Bool = false) throws -> TranscriptionResponse {
-        logEvent("ASR transcribe request begin session=\(sessionID) chunk=\(chunkIndex)")
-        ensureRunning()
-        let body = try JSONSerialization.data(withJSONObject: [
-            "session_id": sessionID,
-            "chunk_index": chunkIndex,
-            "path": audioURL.path,
-            "final": final,
-        ])
-        let audioSeconds = wavStats(audioURL)?.durationSeconds ?? chunkSeconds
-        let timeout = transcribeTimeoutSeconds(audioSeconds: audioSeconds)
-        var lastError: Error?
-        for attempt in 1...2 {
-            let started = CFAbsoluteTimeGetCurrent()
-            do {
-                let data = try postJSON(path: "/transcribe-path", body: body, timeout: timeout)
-                let response = try JSONDecoder().decode(TranscriptionResponse.self, from: data)
-                if let error = response.error {
-                    throw ASRClientError.workerError(error)
-                }
-                let elapsed = CFAbsoluteTimeGetCurrent() - started
-                logEvent("ASR transcribe request end session=\(sessionID) chunk=\(chunkIndex) attempt=\(attempt) http=\(String(format: "%.3f", elapsed))s")
-                return response
-            } catch {
-                lastError = error
-                logEvent("ASR transcribe request failed session=\(sessionID) chunk=\(chunkIndex) attempt=\(attempt) timeout=\(String(format: "%.1f", timeout))s error=\(error)")
-                restartWorker(reason: "transcribe request failed")
-                if attempt < 2 {
-                    ensureRunning()
-                }
-            }
-        }
-        throw lastError ?? ASRClientError.requestFailed("ASR transcribe failed without an error")
-    }
-
-    func shutdown() {
-        shutdown(expectedPID: nil, expectedGeneration: nil)
-    }
-
-    private func shutdown(expectedPID: Int32?, expectedGeneration: Int?) {
-        cancelScheduledShutdown()
-        lifecycleLock.lock()
-        if let expectedGeneration, workerGeneration != expectedGeneration {
-            lifecycleLock.unlock()
-            logEvent("ASR worker idle shutdown skipped; worker generation changed")
-            return
-        }
-        if let expectedPID {
-            guard let process = workerProcess, process.processIdentifier == expectedPID else {
-                lifecycleLock.unlock()
-                logEvent("ASR worker idle shutdown skipped; worker changed")
-                return
-            }
-        } else if expectedGeneration != nil {
-            guard workerProcess == nil else {
-                lifecycleLock.unlock()
-                logEvent("ASR worker idle shutdown skipped; worker ownership changed")
-                return
-            }
-        }
-        let group = warmupGroup
-        lifecycleLock.unlock()
-        if let group {
-            _ = group.wait(timeout: .now() + 5)
-        }
-        if let expectedPID {
-            lifecycleLock.lock()
-            if let expectedGeneration, workerGeneration != expectedGeneration {
-                lifecycleLock.unlock()
-                logEvent("ASR worker idle shutdown skipped after warmup; worker generation changed")
-                return
-            }
-            guard let process = workerProcess, process.processIdentifier == expectedPID else {
-                lifecycleLock.unlock()
-                logEvent("ASR worker idle shutdown skipped after warmup; worker changed")
-                return
-            }
-            lifecycleLock.unlock()
-        } else if let expectedGeneration {
-            lifecycleLock.lock()
-            guard workerProcess == nil, workerGeneration == expectedGeneration else {
-                lifecycleLock.unlock()
-                logEvent("ASR worker idle shutdown skipped after warmup; worker generation changed")
-                return
-            }
-            lifecycleLock.unlock()
-        }
-        guard health() else { return }
-        logEvent("ASR worker shutdown requested")
-        _ = try? postJSON(path: "/shutdown", body: Data(), timeout: 5)
-    }
-
-    func scheduleShutdown() {
-        cancelScheduledShutdown()
-        logEvent("ASR worker left for service-owned idle exit after \(String(format: "%.0f", asrIdleShutdownSeconds))s")
-    }
-
-    func cancelScheduledShutdown() {
-        lifecycleLock.lock()
-        let item = idleShutdownWorkItem
-        idleShutdownWorkItem = nil
-        lifecycleLock.unlock()
-        item?.cancel()
-    }
-
-    func cancelScheduledShutdownForActivity() {
-        lifecycleLock.lock()
-        let item = idleShutdownWorkItem
-        idleShutdownWorkItem = nil
-        workerGeneration += 1
-        lifecycleLock.unlock()
-        item?.cancel()
-    }
-
-    private func health() -> Bool {
-        guard let url = URL(string: "\(asrBaseURL)/health") else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 0.25
-        let semaphore = DispatchSemaphore(value: 0)
-        let ok = SynchronizedBox(false)
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            if let http = response as? HTTPURLResponse, http.statusCode == 200 {
-                ok.set(true)
-            }
-            semaphore.signal()
-        }.resume()
-        _ = semaphore.wait(timeout: .now() + 0.4)
-        return ok.value()
-    }
-
-    private func startWorker() {
-        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
-        let logURL = logDir.appendingPathComponent("asr-worker.log")
-        let process = Process()
-        process.currentDirectoryURL = workerDir
-        process.executableURL = URL(fileURLWithPath: uvExecutablePath())
-        process.arguments = [
-            "run", "uvicorn", "server:app",
-            "--host", "127.0.0.1",
-            "--port", asrPort,
-        ]
-        var environment = ProcessInfo.processInfo.environment
-        environment["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        environment["PERMANENT_TRANSCRIBER_ROOT"] = permanentTranscriberDataRoot.path
-        environment["HF_HOME"] = sharedModelRoot.appendingPathComponent("huggingface").path
-        environment["HUGGINGFACE_HUB_CACHE"] = sharedModelRoot.appendingPathComponent("huggingface/hub").path
-        environment["XDG_CACHE_HOME"] = sharedModelRoot.appendingPathComponent("xdg-cache").path
-        environment["MAC_DICTATION_MLX_CACHE"] = sharedModelRoot.appendingPathComponent("mlx-cache").path
-        process.environment = environment
-        FileManager.default.createFile(atPath: logURL.path, contents: nil)
-        if let handle = try? FileHandle(forWritingTo: logURL) {
-            handle.seekToEndOfFile()
-            process.standardOutput = handle
-            process.standardError = handle
-        }
-        do {
-            try process.run()
-            workerProcess = process
-            workerGeneration += 1
-            logEvent("ASR worker process launched pid=\(process.processIdentifier)")
-        } catch {
-            fputs("failed to start ASR worker: \(error)\n", stderr)
-        }
-    }
-
-    private func transcribeTimeoutSeconds(audioSeconds: Double) -> Double {
-        max(asrTranscribeTimeoutFloorSeconds, min(asrTranscribeTimeoutCeilingSeconds, audioSeconds * 1.5 + 8.0))
-    }
-
-    private func restartWorker(reason: String) {
-        lifecycleLock.lock()
-        let process = workerProcess
-        workerProcess = nil
-        workerGeneration += 1
-        lifecycleLock.unlock()
-
-        guard let process else { return }
-        let pid = process.processIdentifier
-        if process.isRunning {
-            logEvent("ASR worker terminating reason=\(reason) pid=\(pid)")
-            process.terminate()
-            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
-                if process.isRunning {
-                    logEvent("ASR worker force killing pid=\(pid)")
-                    _ = runProcess("/bin/kill", ["-9", "\(pid)"])
-                }
-            }
-        }
-    }
-
-    private func postJSON(path: String, body: Data, timeout: Double) throws -> Data {
-        guard let url = URL(string: "\(asrBaseURL)\(path)") else {
-            throw ASRClientError.requestFailed("invalid ASR URL: \(path)")
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = timeout
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = body.isEmpty ? "{}".data(using: .utf8) : body
-
-        let semaphore = DispatchSemaphore(value: 0)
-        let responseBox = SynchronizedBox<(data: Data, error: Error?)>((Data(), nil))
-        let task = URLSession.shared.dataTask(with: request) { data, _, error in
-            responseBox.set((data ?? Data(), error))
-            semaphore.signal()
-        }
-        task.resume()
-        let waitResult = semaphore.wait(timeout: .now() + timeout + 2)
-        if waitResult == .timedOut {
-            task.cancel()
-            throw ASRClientError.requestFailed("ASR request timed out: \(path)")
-        }
-        let response = responseBox.value()
-        if let requestError = response.error {
-            throw ASRClientError.requestFailed("ASR request failed: \(requestError)")
-        }
-        if response.data.isEmpty {
-            throw ASRClientError.requestFailed("ASR request returned empty response: \(path)")
-        }
-        return response.data
-    }
-}
-
-extension MLXASRClient: @unchecked Sendable {}
 
 func uvExecutablePath() -> String {
     let homeLocal = FileManager.default.homeDirectoryForCurrentUser
@@ -2990,10 +2354,10 @@ enum ManualTranscriptionError: Error, CustomStringConvertible {
 }
 
 final class ManualAudioTranscriber {
-    private let asr: MLXASRClient
+    private let asr: FluidDictationClient
     private let queue = DispatchQueue(label: "com.markschroedr.mac-dictation.manual-transcriber", qos: .userInitiated)
 
-    init(asr: MLXASRClient) {
+    init(asr: FluidDictationClient) {
         self.asr = asr
     }
 
@@ -3037,36 +2401,13 @@ final class ManualAudioTranscriber {
     }
 
     func transcribe(inputURL: URL) throws -> String {
-        let wavURL = try convertForASR(inputURL)
-        defer {
-            try? FileManager.default.removeItem(at: wavURL)
-            asr.scheduleShutdown()
-        }
-        let sessionID = UUID().uuidString
-        asr.resetSession(sessionID)
-        asr.warmupSync()
-        let response = try asr.transcribe(sessionID: sessionID, chunkIndex: 1, audioURL: wavURL)
+        defer { asr.scheduleShutdown() }
+        let response = try asr.transcribeFiles([inputURL], background: true)
         let text = sanitize(response.text ?? "")
         _ = saveTranscript(text, in: manualTranscriptsDir, prefix: "file")
         return text
     }
 
-    private func convertForASR(_ inputURL: URL) throws -> URL {
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mac-dictation-manual-\(UUID().uuidString).wav")
-        let status = runProcess(ffmpegExecutablePath(), [
-            "-hide_banner", "-loglevel", "error", "-y",
-            "-i", inputURL.path,
-            "-ac", "1",
-            "-ar", "16000",
-            "-sample_fmt", "s16",
-            outputURL.path,
-        ])
-        guard status == 0 else {
-            throw ManualTranscriptionError.conversionFailed(status)
-        }
-        return outputURL
-    }
 }
 
 extension ManualAudioTranscriber: @unchecked Sendable {}
@@ -3366,11 +2707,9 @@ func sharedPermanentTranscriberEnvironment() -> [String: String] {
     [
         "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         "MAC_DICTATION_AGENT_ROOT": agentRoot.path,
-        "MAC_DICTATION_ASR_PORT": asrPort,
-        "MAC_DICTATION_ASR_WORKER_DIR": workerDir.path,
+        "MAC_DICTATION_API_PORT": transcriptionAPIPort,
         "MAC_DICTATION_DATA_ROOT": dataRoot.path,
         "MAC_DICTATION_MODEL_ROOT": sharedModelRoot.path,
-        "MAC_DICTATION_MLX_CACHE": sharedModelRoot.appendingPathComponent("mlx-cache").path,
         "PERMANENT_TRANSCRIBER_ROOT": permanentTranscriberDataRoot.path,
         "MAC_DICTATION_SYSTEM_AUDIO_HELPER": systemAudioHelperExecutable.path,
         "HF_HOME": sharedModelRoot.appendingPathComponent("huggingface").path,
@@ -3381,7 +2720,7 @@ func sharedPermanentTranscriberEnvironment() -> [String: String] {
 
 @MainActor
 final class StatusMenuController: NSObject, NSMenuDelegate {
-    private let asr: MLXASRClient
+    private let asr: FluidDictationClient
     private let tts: ClipboardTTSManager
     private let manualTranscriber: ManualAudioTranscriber
     private let permanentTranscriber: PermanentTranscriberController
@@ -3411,7 +2750,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let microphoneItem = NSMenuItem(title: "Dictation Microphone", action: nil, keyEquivalent: "")
     private let recoveryRetentionItem = NSMenuItem(title: "Recovery Audio Retention", action: nil, keyEquivalent: "")
     private var recoveryRetentionItems: [Int: NSMenuItem] = [:]
-    private let dictationModelItem = NSMenuItem(title: "Dictation Model", action: nil, keyEquivalent: "")
+    private let dictationModelItem = NSMenuItem(title: "Transcription Model", action: nil, keyEquivalent: "")
     private var dictationModelItems: [DictationModel: NSMenuItem] = [:]
     var onDictationModelChange: (() -> Void)?
     private let ttsStatusItem = NSMenuItem(title: "TTS: Idle", action: nil, keyEquivalent: "")
@@ -3443,7 +2782,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private var isTTSProcessing = false
     private var selectedMicrophoneName = "Default microphone"
 
-    init(asr: MLXASRClient, tts: ClipboardTTSManager) {
+    init(asr: FluidDictationClient, tts: ClipboardTTSManager) {
         self.asr = asr
         self.tts = tts
         self.manualTranscriber = ManualAudioTranscriber(asr: asr)
@@ -3623,9 +2962,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let openLogFolder = NSMenuItem(title: "Open Log Folder", action: #selector(openLogFolder), keyEquivalent: "")
         openLogFolder.target = self
         diagnosticsMenu.addItem(openLogFolder)
-        let stopWorker = NSMenuItem(title: "Stop Background ASR", action: #selector(stopASRWorker), keyEquivalent: "")
-        stopWorker.target = self
-        diagnosticsMenu.addItem(stopWorker)
         diagnosticsItem.submenu = diagnosticsMenu
         settingsMenu.addItem(.separator())
         settingsMenu.addItem(diagnosticsItem)
@@ -3725,7 +3061,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         for (model, item) in dictationModelItems {
             item.state = model == current ? .on : .off
         }
-        dictationModelItem.title = "Dictation Model — \(current.displayName)"
+        dictationModelItem.title = "Transcription Model — \(current.displayName)"
     }
 
     @objc private func selectRecoveryRetention(_ sender: NSMenuItem) {
@@ -3733,10 +3069,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         RecoveryRetentionPreference.setHours(hours)
         updateRecoveryRetentionState()
         logEvent("dictation recovery retention selected hours=\(hours)")
-    }
-
-    @objc private func stopASRWorker() {
-        asr.shutdown()
     }
 
     @objc private func speakClipboardWithSupertonic() {
@@ -4600,7 +3932,6 @@ final class DictationAgent {
     private let recorder = AudioRecorder()
     private let dictationASR = FluidDictationClient()
     private lazy var transcriptionAPI = TranscriptionAPIServer(asr: dictationASR)
-    private let mlxASR = MLXASRClient()
     private let tts = ClipboardTTSManager()
     private let stateLock = NSLock()
     private let controlQueue = DispatchQueue(label: "com.markschroedr.mac-dictation.control")
@@ -4624,6 +3955,12 @@ final class DictationAgent {
     @MainActor
     func run() {
         if runUpdateE2EIfRequested() { return }
+        if CommandLine.arguments.contains("--serve-transcription-api") {
+            transcriptionAPI.start()
+            DispatchQueue.global(qos: .utility).async { self.dictationASR.warmupSync(background: true) }
+            RunLoop.current.run()
+            return
+        }
         if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--menu-preview" {
             runMenuPreview()
             return
@@ -4701,7 +4038,7 @@ final class DictationAgent {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         app.finishLaunching()
-        statusMenu = StatusMenuController(asr: mlxASR, tts: tts)
+        statusMenu = StatusMenuController(asr: dictationASR, tts: tts)
         statusMenu?.updater.reserveRecording = { [weak self] in
             guard let self else { return false }
             return self.controlQueue.sync {
@@ -4712,8 +4049,7 @@ final class DictationAgent {
                 return true
             }
         }
-        // Load a newly selected model in the background so the next dictation does not wait for
-        // its download and compilation. A running session keeps its model; the switch happens at the next session.
+        // Preload newly selected models off the UI thread; in-flight recognition completes before the switch.
         statusMenu?.onDictationModelChange = { [weak self] in
             guard let self else { return }
             let idle = self.controlQueue.sync {
@@ -4732,6 +4068,7 @@ final class DictationAgent {
         }
         logEvent("Status menu installed.")
         transcriptionAPI.start()
+        DispatchQueue.global(qos: .utility).async { self.dictationASR.warmupSync(background: true) }
         configureAccessibilityFeatures()
         DispatchQueue.global(qos: .utility).async {
             self.recorder.preflight()
@@ -4744,7 +4081,7 @@ final class DictationAgent {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         app.finishLaunching()
-        let menu = StatusMenuController(asr: mlxASR, tts: tts)
+        let menu = StatusMenuController(asr: dictationASR, tts: tts)
         statusMenu = menu
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
         let window = NSWindow(
@@ -4782,18 +4119,9 @@ final class DictationAgent {
     }
 
     private func runTranscribeFile(path: String) {
-        let sessionID = UUID().uuidString
-        mlxASR.resetSession(sessionID)
-        defer {
-            mlxASR.shutdown()
-        }
         do {
-            let response = try mlxASR.transcribe(
-                sessionID: sessionID,
-                chunkIndex: 1,
-                audioURL: URL(fileURLWithPath: path)
-            )
-            print(sanitize(response.text ?? ""))
+            let response = try requestFileTranscription(paths: [path])
+            print(response)
         } catch {
             fputs("transcribe-file failed: \(error)\n", stderr)
             exit(1)

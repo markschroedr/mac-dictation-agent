@@ -32,7 +32,7 @@ export MAC_DICTATION_LAUNCH_AGENT_LABEL="$LABEL"
 export MAC_DICTATION_UPDATE_E2E=1
 export MAC_DICTATION_INSTALL_EXTRAS=0 MAC_DICTATION_WARM_MODELS=0
 export MAC_DICTATION_PREBUILT_APP="${OLD_PACKAGE[0]}/MacDictationAgent.app"
-export MAC_DICTATION_ASR_PORT=18796
+export MAC_DICTATION_API_PORT=18797
 # An ephemeral localhost feed serves valid bytes or deliberately corrupts them.
 cat > "$ROOT/feed.py" <<'PYTHON'
 import http.server, json, pathlib, sys

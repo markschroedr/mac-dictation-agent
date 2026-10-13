@@ -41,7 +41,7 @@ curl -F file=@recording.m4a http://127.0.0.1:8767/v1/audio/transcriptions
 # {"text":"...","duration":3.3}
 ```
 
-The app accepts formats that CoreAudio reads, such as WAV, AIFF, M4A/MP4 (AAC), MP3, and CAF. It does not accept WebM or Ogg. Uploads are limited to 25 MB. Requests queue behind dictation chunks. `GET /health` reports readiness. Set `MAC_DICTATION_API_PORT` to change the port.
+The app accepts formats that CoreAudio reads, such as WAV, AIFF, M4A/MP4 (AAC), MP3, and CAF. It does not accept WebM or Ogg. Uploads are limited to 25 MB. Continuous and file transcription yield to dictation between 20-second recognition windows. `GET /health` reports readiness. Set `MAC_DICTATION_API_PORT` to change the port.
 
 ## Optional tools
 
@@ -62,7 +62,7 @@ Choose a microphone and mode from the menu, then start continuous transcription.
 - **Canonical Only** writes larger durable batches, speaker-labelled variants, and compacted archival audio.
 - **Quick + Canonical** also writes smaller provisional batches.
 
-This is separate from hotkey dictation. Its workers wake every 3 seconds and process canonical batches of up to 5 minutes. On shutdown, each worker drains the segments already in its manifest.
+Its workers wake every 3 seconds and process canonical batches of up to 5 minutes through the same FluidAudio model as dictation. Choose the model for all workflows under **Settings → Transcription Model**. Background batches yield between 20-second windows so dictation does not wait behind the backlog. Keep the app running while workers drain. On shutdown, each worker drains the segments already in its manifest.
 
 Sortformer diarization streams 5-second chunks with a 2 GiB MLX working-memory limit. This is a library limit, not an OS memory sandbox.
 
@@ -81,7 +81,7 @@ bash "$HOME/Library/Application Support/Mac Dictation Agent/runtime/scripts/batc
   /path/to/audio --output-dir batch-output
 ```
 
-The command finds common audio formats recursively. It writes `results.json`, `results.jsonl`, and a text file for each input.
+Keep the app running. The command finds common audio formats recursively and submits them to its shared FluidAudio service. It writes `results.json`, `results.jsonl`, and a text file for each input. The output directory must be new.
 
 ### Text-to-speech
 
@@ -142,7 +142,7 @@ The uninstaller leaves user data in Application Support.
 
 ## Development
 
-Hotkey dictation uses FluidAudio's INT8 Core ML Parakeet model. File and continuous transcription use an on-demand MLX worker for media conversion, batch processing, retries, and speaker metadata.
+All recognition uses one app-owned FluidAudio Core ML model, with Parakeet Ultra as the default. Continuous workers submit local file paths over loopback; they never load their own recognition model. Sortformer remains optional speaker diarization for microphone-only canonical output, not a transcription engine.
 
 ```bash
 swift build -c release --package-path swift-agent
@@ -168,7 +168,6 @@ uv run --project vendor/permanent-transcriber \
 ## Source layout
 
 - `swift-agent/`: menu-bar app, capture, and native dictation helper.
-- `asr_worker/`: Parakeet-MLX worker and batch CLI.
 - `supertonic_worker/`: local TTS helper.
 - `vendor/permanent-transcriber/`: continuous capture, transcription, compaction, and diarization.
 - `scripts/`: installation, release, media, and verification.

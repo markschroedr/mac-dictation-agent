@@ -29,7 +29,7 @@ if [[ "${1:-}" != "--activate" ]]; then
   fi
   mkdir -p "$ROOT/vendor"
   # Explicit product allowlist. Never mirror a checkout or delete destination data.
-  for directory in asr_worker supertonic_worker scripts docs; do
+  for directory in supertonic_worker scripts docs; do
     rsync -a --exclude .venv --exclude __pycache__ --exclude .pytest_cache \
       --exclude '*.log' --exclude .env --exclude tts.env \
       "$SOURCE_ROOT/$directory/" "$ROOT/$directory/"
@@ -46,7 +46,7 @@ if [[ "${1:-}" != "--activate" ]]; then
     fi
   done
   if [[ "$EXTRAS" == 1 ]]; then
-    for project in asr_worker supertonic_worker vendor/permanent-transcriber; do
+    for project in supertonic_worker vendor/permanent-transcriber; do
       (cd "$ROOT/$project" && uv sync --frozen)
     done
   fi
@@ -87,7 +87,7 @@ if [[ "${1:-}" != "--activate" ]]; then
   add_env MAC_DICTATION_TTS_IDLE_SECONDS "${MAC_DICTATION_TTS_IDLE_SECONDS:-300}"
   # A cold Fluid start can recompile the ANE encoder for 20-90 s; keep it resident.
   add_env MAC_DICTATION_FLUID_IDLE_SECONDS "${MAC_DICTATION_FLUID_IDLE_SECONDS:-86400}"
-  add_env MAC_DICTATION_ASR_PORT "${MAC_DICTATION_ASR_PORT:-8766}"
+  add_env MAC_DICTATION_API_PORT "${MAC_DICTATION_API_PORT:-8767}"
   add_env MAC_DICTATION_LAUNCH_AGENT_LABEL "$LABEL"
   add_env MAC_DICTATION_PLIST "$PLIST"
   if [[ -n "${MAC_DICTATION_UPDATE_FEED_URL:-}" ]]; then add_env MAC_DICTATION_UPDATE_FEED_URL "$MAC_DICTATION_UPDATE_FEED_URL"; fi

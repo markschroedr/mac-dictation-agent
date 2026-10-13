@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .asr_backends import AsrBackend, create_backend
+from .asr_backends import AsrBackend, FluidAudioBackend
 from .config import AppPaths
 from .diarization import SortformerDiarizer, asr_segments_from_result
 from .ffmpeg_tools import reencode_audio_to_opus, sha256_file
@@ -281,7 +281,7 @@ class TranscriptionWorker:
 
     def backend(self) -> AsrBackend:
         if self._backend is None:
-            self._backend = create_backend(paths=self.paths)
+            self._backend = FluidAudioBackend()
         return self._backend
 
     def _append_profile_text(

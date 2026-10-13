@@ -23,7 +23,7 @@ The project has two transcription profiles:
 - `quick`: provisional output, small low-latency batches, frequent polling
 - `relaxed`: canonical output, larger efficient batches, audio compaction, and speaker diarization
 
-Both use the same captured VAD segments and the same shared `asr_worker` Parakeet-MLX service. The quick profile is optional. The menu calls the `relaxed` profile **Canonical** because that describes its output.
+Both use the same captured VAD segments and the app-owned FluidAudio service. The quick profile is optional. The menu calls the `relaxed` profile **Canonical** because that describes its output.
 
 Audio lifecycle:
 
@@ -118,9 +118,9 @@ PERMANENT_TRANSCRIBER_ROOT="$PWD" ./.venv/bin/permanent-transcriber doctor
 
 ## ASR
 
-By default, permanent-transcriber does not load a local ASR model itself. It uses the Mac Dictation `asr_worker` HTTP service through the `mac-dictation-asr` backend. Manual file transcription uses the same service. Hotkey dictation uses the separate native FluidAudio helper.
+Permanent-transcriber uses the running Mac Dictation Agent on loopback port 8767. Interactive dictation, manual files, quick/canonical batches, and source tracks all share one native FluidAudio model. Workers never start a recognition helper themselves. Keep the app running during capture and shutdown draining.
 
-If the service is already running, the worker uses it. If it is not running, the worker starts it from `MAC_DICTATION_ASR_WORKER_DIR`, or from `$MAC_DICTATION_AGENT_ROOT/asr_worker` when that exists. `MAC_DICTATION_ASR_PORT` can be set to isolate test runs.
+**Settings → Transcription Model** selects the model for all transcription. Background batches yield to dictation between 20-second recognition windows. Set `MAC_DICTATION_API_PORT` on both the app and workers to isolate test runs.
 
 The active permanent-transcriber package has no Whisper, ONNX, or standalone Parakeet backend route. Historical comparison implementations are not part of the public source release.
 

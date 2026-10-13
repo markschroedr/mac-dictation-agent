@@ -7,8 +7,8 @@ private final class FluidASRService {
     private let modelRoot: URL
     private let model: DictationModel
     private var manager: AsrManager?
-    private var activeSessionID: String?
-    private var responseCache: [Int: DictationServiceResponse] = [:]
+    private var responseCache: [String: DictationServiceResponse] = [:]
+    private var cacheOrder: [String] = []
 
     init(modelRoot: URL, model: DictationModel) {
         self.modelRoot = modelRoot
@@ -25,8 +25,9 @@ private final class FluidASRService {
                 guard let sessionID = request.sessionID, !sessionID.isEmpty else {
                     throw ServiceError.invalidRequest("resetSession requires sessionID")
                 }
-                activeSessionID = sessionID
-                responseCache.removeAll(keepingCapacity: true)
+                let prefix = sessionID + ":"
+                responseCache = responseCache.filter { !$0.key.hasPrefix(prefix) }
+                cacheOrder.removeAll { $0.hasPrefix(prefix) }
                 return DictationServiceResponse(id: request.id)
             case .transcribe:
                 return try await transcribe(request)
@@ -87,7 +88,9 @@ private final class FluidASRService {
         var start = 0.0
         var end = 0.0
         for word in words {
-            if !text.isEmpty && word.startTime - end >= 0.7 {
+            // Keep clauses separate even without a long pause. Source echo
+            // matching must not treat remote speech plus a local reply as one turn.
+            if !text.isEmpty && (word.startTime - end >= 0.7 || text.last.map { ".!?;,:".contains($0) } == true) {
                 segments.append(DictationTextSegment(start: start, end: end, text: text))
                 text = ""
             }
@@ -96,6 +99,9 @@ private final class FluidASRService {
             end = word.endTime
         }
         if !text.isEmpty { segments.append(DictationTextSegment(start: start, end: end, text: text)) }
+        if segments.isEmpty && !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            segments = [DictationTextSegment(start: 0, end: result.duration, text: result.text)]
+        }
         return segments
     }
 
@@ -111,11 +117,8 @@ private final class FluidASRService {
             throw ServiceError.audioMissing(path)
         }
 
-        if activeSessionID != sessionID {
-            activeSessionID = sessionID
-            responseCache.removeAll(keepingCapacity: true)
-        }
-        if let cached = responseCache[chunkIndex] {
+        let cacheKey = "\(sessionID):\(chunkIndex)"
+        if let cached = responseCache[cacheKey] {
             log("cache hit session=\(sessionID) chunk=\(chunkIndex)")
             return cached.replacingID(with: request.id)
         }
@@ -153,7 +156,9 @@ private final class FluidASRService {
             recognizeSeconds: elapsed,
             speedup: elapsed > 0 ? sourceDuration / elapsed : nil
         )
-        responseCache[chunkIndex] = response
+        responseCache[cacheKey] = response
+        cacheOrder.append(cacheKey)
+        if cacheOrder.count > 128 { responseCache.removeValue(forKey: cacheOrder.removeFirst()) }
         log(
             "transcribed session=\(sessionID) chunk=\(chunkIndex) final=\(request.final) "
                 + "audio=\(String(format: "%.3f", sourceDuration))s "

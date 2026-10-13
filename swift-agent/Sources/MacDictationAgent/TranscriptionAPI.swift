@@ -6,7 +6,7 @@ let transcriptionAPIPort = ProcessInfo.processInfo.environment["MAC_DICTATION_AP
 private let maxTranscriptionUploadBytes = 25 * 1024 * 1024
 
 /// Loopback OpenAI-compatible transcription endpoint for local tools. It shares the
-/// hotkey-dictation helper, so requests queue behind dictation chunks and reuse its idle shutdown.
+/// hotkey-dictation helper. Continuous/file work yields to dictation between audio windows.
 final class TranscriptionAPIServer: @unchecked Sendable {
     private let asr: FluidDictationClient
     private let queue = DispatchQueue(label: "com.markschroedr.mac-dictation.transcription-api")
@@ -69,6 +69,8 @@ final class TranscriptionAPIServer: @unchecked Sendable {
             return .json(HealthBody())
         case ("POST", "/v1/audio/transcriptions"):
             return transcribe(request)
+        case ("POST", "/transcribe-file"):
+            return transcribeFiles(request)
         default:
             return .error(404, "not found")
         }
@@ -99,12 +101,7 @@ final class TranscriptionAPIServer: @unchecked Sendable {
             let audioURL = directory.appendingPathComponent(fileExtension.isEmpty ? "upload" : "upload.\(fileExtension)")
             try upload.data.write(to: audioURL)
             let started = CFAbsoluteTimeGetCurrent()
-            let response = try asr.transcribe(
-                sessionID: "api-\(UUID().uuidString)",
-                chunkIndex: 1,
-                audioURL: audioURL,
-                final: true
-            )
+            let response = try asr.transcribeFiles([audioURL], background: false)
             let text = sanitize(response.text ?? "")
             logEvent(
                 "transcription API request end bytes=\(upload.data.count) "
@@ -120,6 +117,22 @@ final class TranscriptionAPIServer: @unchecked Sendable {
             logEvent("transcription API request failed error=\(error)")
             return .error(500, "\(error)", type: "server_error")
         }
+    }
+
+    private func transcribeFiles(_ request: HTTPRequest) -> HTTPResponse {
+        struct Input: Decodable { let paths: [String] }
+        guard let input = try? JSONDecoder().decode(Input.self, from: request.body),
+              !input.paths.isEmpty, input.paths.count <= 500,
+              input.paths.allSatisfy({ $0.hasPrefix("/") }) else {
+            return .error(400, "paths must contain 1-500 absolute audio paths")
+        }
+        defer { asr.scheduleShutdown() }
+        let started = ProcessInfo.processInfo.systemUptime
+        do {
+            let result = try asr.transcribeFiles(input.paths.map { URL(fileURLWithPath: $0) }, background: true)
+            return .json(FileTranscriptionBody(result: result,
+                elapsed: ProcessInfo.processInfo.systemUptime - started))
+        } catch { return .error(500, "\(error)", type: "server_error") }
     }
 
     private func respond(_ connection: NWConnection, _ response: HTTPResponse) {
@@ -247,6 +260,49 @@ private struct HealthBody: Encodable {
     let ok = true
     let service = "mac-dictation-agent"
     let backend = "fluid-audio-\(DictationModel.current.rawValue)"
+}
+
+private struct FileTranscriptionBody: Encodable {
+    let backend = "fluid-audio"
+    let provider = "CoreML"
+    let model = DictationModel.current.rawValue
+    let text: String
+    let segments: [DictationTextSegment]
+    let audio_seconds: Double
+    let elapsed_seconds: Double
+    let rtf: Double?
+
+    init(result: TranscriptionResponse, elapsed: Double) {
+        text = sanitize(result.text ?? "")
+        segments = result.segments ?? []
+        audio_seconds = result.duration_seconds ?? 0
+        elapsed_seconds = elapsed
+        rtf = audio_seconds > 0 ? elapsed / audio_seconds : nil
+    }
+}
+
+/// CLI consumers reuse the app-owned model rather than launching another helper.
+func requestFileTranscription(paths: [String]) throws -> String {
+    var request = URLRequest(url: URL(string: "http://127.0.0.1:\(transcriptionAPIPort)/transcribe-file")!)
+    request.httpMethod = "POST"
+    request.httpBody = try JSONSerialization.data(withJSONObject: ["paths": paths])
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.timeoutInterval = 3600
+    let semaphore = DispatchSemaphore(value: 0)
+    let box = SynchronizedBox<Result<String, Error>?>(nil)
+    URLSession.shared.dataTask(with: request) { data, response, error in
+        defer { semaphore.signal() }
+        if let error { box.set(.failure(error)); return }
+        guard (response as? HTTPURLResponse)?.statusCode == 200, let data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = object["text"] as? String else {
+            box.set(.failure(ASRClientError.requestFailed("File transcription failed; keep Mac Dictation Agent running")))
+            return
+        }
+        box.set(.success(text))
+    }.resume()
+    semaphore.wait()
+    return try box.value()!.get()
 }
 
 private struct TranscriptionBody: Encodable {

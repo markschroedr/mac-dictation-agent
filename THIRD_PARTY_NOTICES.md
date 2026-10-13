@@ -2,28 +2,21 @@
 
 Mac Dictation Agent downloads and uses the following models at runtime:
 
-## Parakeet TDT 0.6B v3 (continuous recording)
-
-- MLX conversion: `mlx-community/parakeet-tdt-0.6b-v3`
-- Original model: NVIDIA NeMo Parakeet TDT 0.6B v3
-- License: Creative Commons Attribution 4.0 International (CC BY 4.0)
-- Source: https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3
-
-## Parakeet Ultra (dictation default)
+## Parakeet Ultra (transcription default)
 
 - Core ML conversion: `FluidInference/parakeet-ultra-coreml`
 - Original model: `moondream/parakeet-ultra`, a post-training of NVIDIA Parakeet TDT 0.6B v3
 - License: Creative Commons Attribution 4.0 International (CC BY 4.0)
 - Core ML source: https://huggingface.co/FluidInference/parakeet-ultra-coreml
 
-## Phonon-2 (optional dictation model)
+## Phonon-2 (optional transcription model)
 
 - Core ML conversion: `FluidInference/phonon-2-coreml`
 - Original model: `FermionResearch/Phonon-2`, a re-training of NVIDIA Parakeet TDT 0.6B v3
 - License: Creative Commons Attribution 4.0 International (CC BY 4.0)
 - Core ML source: https://huggingface.co/FluidInference/phonon-2-coreml
 
-The models are not included in this repository or release archive. Each transcription path downloads its model on first use.
+The models are not included in this repository or release archive. All transcription paths share the selected FluidAudio model.
 
 ## FluidAudio
 
@@ -56,9 +49,4 @@ The package and model are not included in this repository. The local TTS helper 
 
 The model is not included in this repository. It is downloaded when canonical continuous transcription first attempts speaker diarization.
 
-## parakeet-mlx
-
-- License: Apache License 2.0
-- Source: https://github.com/senstella/parakeet-mlx
-
-Python and Swift dependencies retain their respective licenses. Lockfiles under `asr_worker/`, `supertonic_worker/`, `swift-agent/`, and `vendor/permanent-transcriber/` record the exact source-release dependency sets.
+Python and Swift dependencies retain their respective licenses. Lockfiles under `supertonic_worker/`, `swift-agent/`, and `vendor/permanent-transcriber/` record the exact source-release dependency sets.
