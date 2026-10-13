@@ -69,7 +69,6 @@ private final class FluidASRService {
     private var asrVersion: AsrModelVersion {
         switch model {
         case .ultra: return .ultra
-        case .phonon2: return .phonon2
         }
     }
 
@@ -77,7 +76,6 @@ private final class FluidASRService {
     private var repo: Repo {
         switch model {
         case .ultra: return .parakeetUltra
-        case .phonon2: return .phonon2
         }
     }
 

@@ -9,13 +9,6 @@ Mac Dictation Agent downloads and uses the following models at runtime:
 - License: Creative Commons Attribution 4.0 International (CC BY 4.0)
 - Core ML source: https://huggingface.co/FluidInference/parakeet-ultra-coreml
 
-## Phonon-2 (optional transcription model)
-
-- Core ML conversion: `FluidInference/phonon-2-coreml`
-- Original model: `FermionResearch/Phonon-2`, a re-training of NVIDIA Parakeet TDT 0.6B v3
-- License: Creative Commons Attribution 4.0 International (CC BY 4.0)
-- Core ML source: https://huggingface.co/FluidInference/phonon-2-coreml
-
 The models are not included in this repository or release archive. All transcription paths share the selected FluidAudio model.
 
 ## FluidAudio

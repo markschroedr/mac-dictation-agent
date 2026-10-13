@@ -4,7 +4,6 @@ import Foundation
 /// in `MAC_DICTATION_FLUID_MODEL` when it launches the service.
 public enum DictationModel: String, CaseIterable, Sendable {
     case ultra
-    case phonon2
 
     public static let environmentKey = "MAC_DICTATION_FLUID_MODEL"
     public static let defaultModel = DictationModel.ultra

@@ -386,7 +386,6 @@ extension DictationModel {
     var displayName: String {
         switch self {
         case .ultra: return "Parakeet Ultra"
-        case .phonon2: return "Phonon-2 (English only)"
         }
     }
 
