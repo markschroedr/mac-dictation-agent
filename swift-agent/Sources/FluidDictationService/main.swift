@@ -53,10 +53,9 @@ private final class FluidASRService {
         let configuration = MLModelConfiguration()
         configuration.computeUnits = .all
         let models = try await AsrModels.downloadAndLoad(
-            to: modelRoot,
+            to: modelRoot.appendingPathComponent(repo.folderName, isDirectory: true),
             configuration: configuration,
             version: asrVersion,
-            encoderPrecision: .int8,
             encoderComputeUnits: .all
         )
         let loadedManager = AsrManager(config: .default)
@@ -68,8 +67,15 @@ private final class FluidASRService {
 
     private var asrVersion: AsrModelVersion {
         switch model {
-        case .v3: return .v3
         case .ultra: return .ultra
+        case .phonon2: return .phonon2
+        }
+    }
+
+    // FluidAudio treats the download target as the model directory itself.
+    private var repo: Repo {
+        switch model {
+        case .ultra: return .parakeetUltra
         case .phonon2: return .phonon2
         }
     }

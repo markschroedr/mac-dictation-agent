@@ -2,14 +2,26 @@
 
 Mac Dictation Agent downloads and uses the following models at runtime:
 
-## Parakeet TDT 0.6B v3
+## Parakeet TDT 0.6B v3 (continuous recording)
 
 - MLX conversion: `mlx-community/parakeet-tdt-0.6b-v3`
-- Core ML conversion: `FluidInference/parakeet-tdt-0.6b-v3-coreml`
 - Original model: NVIDIA NeMo Parakeet TDT 0.6B v3
 - License: Creative Commons Attribution 4.0 International (CC BY 4.0)
 - Source: https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3
-- Core ML source: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml
+
+## Parakeet Ultra (dictation default)
+
+- Core ML conversion: `FluidInference/parakeet-ultra-coreml`
+- Original model: `moondream/parakeet-ultra`, a post-training of NVIDIA Parakeet TDT 0.6B v3
+- License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+- Core ML source: https://huggingface.co/FluidInference/parakeet-ultra-coreml
+
+## Phonon-2 (optional dictation model)
+
+- Core ML conversion: `FluidInference/phonon-2-coreml`
+- Original model: `FermionResearch/Phonon-2`, a re-training of NVIDIA Parakeet TDT 0.6B v3
+- License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+- Core ML source: https://huggingface.co/FluidInference/phonon-2-coreml
 
 The models are not included in this repository or release archive. Each transcription path downloads its model on first use.
 

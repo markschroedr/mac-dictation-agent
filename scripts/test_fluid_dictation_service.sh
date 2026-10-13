@@ -5,7 +5,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE="${MAC_DICTATION_FLUID_SERVICE_BIN:-$ROOT/swift-agent/.build/release/FluidDictationService}"
 APP="${MAC_DICTATION_APP_BIN:-$ROOT/swift-agent/.build/release/MacDictationAgent}"
 MODEL_ROOT="${MAC_DICTATION_FLUID_MODEL_ROOT:-$HOME/Library/Application Support/Mac Dictation Agent/models/fluid-audio}"
-LEGACY_MODEL_ROOT="$HOME/Library/Application Support/FluidAudio/Models"
 TEST_ROOT="$(mktemp -d -t mac-dictation-fluid-test)"
 AUDIO="${1:-$TEST_ROOT/test.wav}"
 REQUESTS=""
@@ -29,9 +28,6 @@ fi
 if [[ ! -f "$AUDIO" ]]; then
   echo "missing test audio: $AUDIO" >&2
   exit 1
-fi
-if [[ ! -d "$MODEL_ROOT/parakeet-tdt-0.6b-v3" && -d "$LEGACY_MODEL_ROOT/parakeet-tdt-0.6b-v3" ]]; then
-  MODEL_ROOT="$LEGACY_MODEL_ROOT"
 fi
 
 SESSION_ID="fluid-test-$$"

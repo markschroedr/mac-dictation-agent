@@ -392,7 +392,6 @@ enum TTSLanguage: String, CaseIterable, Sendable {
 extension DictationModel {
     var displayName: String {
         switch self {
-        case .v3: return "Parakeet v3"
         case .ultra: return "Parakeet Ultra"
         case .phonon2: return "Phonon-2 (English only)"
         }

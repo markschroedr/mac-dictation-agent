@@ -9,7 +9,6 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE="${MAC_DICTATION_FLUID_SERVICE_BIN:-$ROOT/swift-agent/.build/release/FluidDictationService}"
 MODEL_ROOT="${MAC_DICTATION_FLUID_MODEL_ROOT:-$HOME/Library/Application Support/Mac Dictation Agent/models/fluid-audio}"
-LEGACY_MODEL_ROOT="$HOME/Library/Application Support/FluidAudio/Models"
 AUDIO="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
 RUNS="${2:-5}"
 REQUESTS="$(mktemp "${TMPDIR:-/tmp}/mac-dictation-benchmark-requests.XXXXXX")"
@@ -31,9 +30,6 @@ fi
 if ! [[ "$RUNS" =~ ^[1-9][0-9]*$ ]]; then
   echo "runs must be a positive integer" >&2
   exit 2
-fi
-if [[ ! -d "$MODEL_ROOT/parakeet-tdt-0.6b-v3" && -d "$LEGACY_MODEL_ROOT/parakeet-tdt-0.6b-v3" ]]; then
-  MODEL_ROOT="$LEGACY_MODEL_ROOT"
 fi
 
 jq -nc --arg id warmup '{id:$id,action:"warmup",final:false}' >"$REQUESTS"

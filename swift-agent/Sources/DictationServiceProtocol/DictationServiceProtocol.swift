@@ -3,12 +3,11 @@ import Foundation
 /// Parakeet TDT checkpoint the Fluid service loads. The app passes the raw value
 /// in `MAC_DICTATION_FLUID_MODEL` when it launches the service.
 public enum DictationModel: String, CaseIterable, Sendable {
-    case v3
     case ultra
     case phonon2
 
     public static let environmentKey = "MAC_DICTATION_FLUID_MODEL"
-    public static let defaultModel = DictationModel.v3
+    public static let defaultModel = DictationModel.ultra
 }
 
 public enum DictationServiceAction: String, Codable, Sendable {
