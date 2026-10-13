@@ -76,7 +76,7 @@ let fluidIdleShutdownSeconds = Double(ProcessInfo.processInfo.environment["MAC_D
 let localTTSIdleShutdownSeconds = Double(
     ProcessInfo.processInfo.environment["MAC_DICTATION_TTS_IDLE_SECONDS"] ?? ""
 ) ?? 300.0
-let fluidWarmupTimeoutSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_WARMUP_TIMEOUT_SECONDS"] ?? "") ?? 60.0
+let fluidWarmupTimeoutSeconds = Double(ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_WARMUP_TIMEOUT_SECONDS"] ?? "") ?? 600.0
 let fluidSessionPrepareTimeoutSeconds = Double(
     ProcessInfo.processInfo.environment["MAC_DICTATION_FLUID_SESSION_PREPARE_TIMEOUT_SECONDS"] ?? ""
 ) ?? (fluidWarmupTimeoutSeconds + 10.0)
