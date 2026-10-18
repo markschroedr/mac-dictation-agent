@@ -19,10 +19,15 @@ from .capture_health import (
     write_capture_health,
 )
 from .config import AppPaths, CaptureConfig
+from .device import resolve_input_device
 from .process_state import acquire_process_lock, read_live_pid, stop_process
 from .segment_writer import FinalizedSegment, SegmentWriter
 from .vad import VadSegmenter
 from .source_tracks import SourceTracks
+
+# A live input stream delivers a frame every 30 ms. This long without one means
+# the device is gone (e.g. Bluetooth headset removed), not merely quiet.
+MICROPHONE_LOSS_SECONDS = 2.0
 
 
 class CaptureService:
@@ -40,6 +45,7 @@ class CaptureService:
         self._system_audio_thread: threading.Thread | None = None
         self._source_tracks: SourceTracks | None = None
         self._system_audio_error: Exception | None = None
+        self._stream: sd.RawInputStream | None = None
 
     def run_forever(self) -> None:
         self.paths.ensure()
@@ -49,6 +55,8 @@ class CaptureService:
         monitor = CaptureSignalMonitor(self.config.digital_silence_timeout_seconds)
         healthy = False
         failed = False
+        # The first failure is the cause; cleanup errors that follow are symptoms.
+        first_error: str | None = None
         write_capture_health(
             self.paths.capture_health_file,
             status="starting",
@@ -79,32 +87,36 @@ class CaptureService:
             if self.config.include_system_audio:
                 self._source_tracks = SourceTracks(self.paths.root, self.config.sample_rate_hz)
                 self._start_system_audio(monitor)
-            with sd.RawInputStream(
-                samplerate=self.config.sample_rate_hz,
-                channels=self.config.channels,
-                dtype="int16",
-                blocksize=blocksize,
-                callback=callback,
-                device=self.config.input_device,
-            ):
-                self.logger.info("capture started")
+            self._open_microphone(self.config.input_device, callback, blocksize)
+            self.logger.info("capture started")
+            last_frame_at = time.monotonic()
+            try:
                 while not self._stop:
                     if self._system_audio_error is not None:
                         raise RuntimeError("System audio capture failed") from self._system_audio_error
                     if self._dropped_frames:
                         raise RuntimeError("Microphone capture queue overflow; source recording is incomplete")
                     try:
-                        item = self.frame_queue.get(timeout=1.0)
+                        item = self.frame_queue.get(timeout=0.5)
                     except queue.Empty:
-                        monitor.check()
+                        if healthy and time.monotonic() - last_frame_at >= MICROPHONE_LOSS_SECONDS:
+                            # Losing the microphone mid-recording is normal; keep recording.
+                            self._switch_microphone(callback, blocksize, last_frame_at)
+                            last_frame_at = time.monotonic()
+                        elif not healthy:
+                            monitor.check()
                         continue
                     if item is None:
                         break
                     frame, timestamp = item
+                    last_frame_at = time.monotonic()
                     if self._source_tracks is not None:
                         self._source_tracks.write("microphone", frame)
                     monitor.observe(frame)
-                    monitor.check()
+                    # Silence is fatal only at startup (missing permission). A muted
+                    # or quiet microphone during a recording is still a recording.
+                    if not healthy:
+                        monitor.check()
                     if monitor.has_signal and not healthy:
                         healthy = True
                         write_capture_health(
@@ -124,11 +136,14 @@ class CaptureService:
                                 pcm_path=event.pcm_path,
                             )
                         )
+            finally:
+                self._close_microphone()
         except sd.PortAudioError as exc:
             failed = True
             error = RuntimeError(
                 "failed to open input device; try `devices` and then pass `--device` explicitly"
             )
+            first_error = str(error)
             self.logger.error("%s: %s", error, exc)
             write_capture_health(
                 self.paths.capture_health_file,
@@ -140,6 +155,7 @@ class CaptureService:
             raise error from exc
         except DigitalSilenceError as exc:
             failed = True
+            first_error = str(exc)
             self.logger.error("capture unhealthy: %s", exc)
             write_capture_health(
                 self.paths.capture_health_file,
@@ -151,6 +167,7 @@ class CaptureService:
             raise
         except Exception as exc:
             failed = True
+            first_error = str(exc)
             self.logger.exception("capture failed")
             write_capture_health(
                 self.paths.capture_health_file,
@@ -172,6 +189,8 @@ class CaptureService:
                         pcm_path=flushed.pcm_path,
                     )
                 )
+            # Terminating the helper below ends its output; that EOF is expected.
+            self._stop = True
             try:
                 self._stop_system_audio()
                 if self._source_tracks is not None:
@@ -189,11 +208,12 @@ class CaptureService:
                         (self._source_tracks.root / "closed.json").write_text('{}\n')
             except Exception as exc:
                 failed = True
+                first_error = first_error or str(exc)
                 if self._source_tracks is not None:
-                    (self._source_tracks.root / "capture-error.txt").write_text(str(exc) + '\n')
+                    (self._source_tracks.root / "capture-error.txt").write_text(first_error + '\n')
                 write_capture_health(
                     self.paths.capture_health_file, status="error", pid=os.getpid(),
-                    device=self.config.input_device, error=str(exc),
+                    device=self.config.input_device, error=first_error,
                 )
                 raise
             finally:
@@ -202,7 +222,7 @@ class CaptureService:
                 if failed and self._source_tracks is not None:
                     error = self._source_tracks.root / "capture-error.txt"
                     if not error.exists():
-                        error.write_text('Capture failed; source recording is incomplete\n')
+                        error.write_text((first_error or 'Capture failed; source recording is incomplete') + '\n')
             if not failed:
                 write_capture_health(
                     self.paths.capture_health_file,
@@ -211,6 +231,56 @@ class CaptureService:
                     device=self.config.input_device,
                 )
             self.logger.info("capture stopped")
+
+    def _open_microphone(self, device, callback, blocksize: int) -> None:
+        self._stream = sd.RawInputStream(
+            samplerate=self.config.sample_rate_hz,
+            channels=self.config.channels,
+            dtype="int16",
+            blocksize=blocksize,
+            callback=callback,
+            device=device,
+        )
+        self._stream.start()
+
+    def _close_microphone(self) -> None:
+        stream, self._stream = self._stream, None
+        if stream is None:
+            return
+        try:
+            stream.abort()
+            stream.close()
+        except sd.PortAudioError as exc:
+            self.logger.warning("closing lost microphone stream failed: %s", exc)
+
+    def _switch_microphone(self, callback, blocksize: int, lost_at: float) -> None:
+        self.logger.warning("microphone delivered no audio for %.1fs; switching to the current input device",
+                            time.monotonic() - lost_at)
+        self._close_microphone()
+        while not self._stop:
+            if self._system_audio_error is not None:
+                raise RuntimeError("System audio capture failed") from self._system_audio_error
+            try:
+                # PortAudio reads the device list only at initialization.
+                sd._terminate()
+                sd._initialize()
+                device, details = resolve_input_device(self.paths)
+                self._open_microphone(device, callback, blocksize)
+                break
+            except (sd.PortAudioError, RuntimeError) as exc:
+                self.logger.warning("no usable input device yet: %s", exc)
+                time.sleep(1.0)
+        else:
+            return
+        gap = time.monotonic() - lost_at
+        if self._source_tracks is not None:
+            # Silence keeps the microphone track aligned with system audio.
+            samples = int(gap * self.config.sample_rate_hz) * self.config.channels
+            self._source_tracks.write("microphone", bytes(2 * samples))
+        self.logger.warning("microphone switched to %s after a %.1fs gap", details["device"]["name"], gap)
+        write_capture_health(
+            self.paths.capture_health_file, status="healthy", pid=os.getpid(), device=device,
+        )
 
     def _start_system_audio(self, monitor: CaptureSignalMonitor) -> None:
         helper = self.config.system_audio_helper

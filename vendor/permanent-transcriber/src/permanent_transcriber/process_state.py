@@ -18,8 +18,11 @@ import time
 _held_locks: dict[Path, int] = {}
 
 
-def acquire_process_lock(path: Path, name: str) -> None:
-    """Record the current process in PATH, or fail when another live process holds it."""
+def acquire_process_lock(path: Path, name: str) -> int:
+    """Record the current process in PATH, or fail when another live process holds it.
+
+    Returns the lock descriptor. A child given it via pass_fds shares the lock.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
     try:
@@ -31,6 +34,19 @@ def acquire_process_lock(path: Path, name: str) -> None:
     os.write(descriptor, json.dumps({"pid": os.getpid()}).encode())
     # Kept open, and not inherited by children, until this process exits.
     _held_locks[path] = descriptor
+    return descriptor
+
+
+def hold_start_lock(state_root: Path) -> int:
+    """Block until this process owns the start/exit decision; close the result to release.
+
+    Start holds it while launching. A worker holds it from its exit decision
+    until it exits, so Start never reuses a worker that is about to vanish.
+    """
+    state_root.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(state_root / "start.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    return descriptor
 
 
 def read_live_pid(path: Path) -> int | None:

@@ -16,8 +16,8 @@ from .config import AppPaths
 from .diarization import SortformerDiarizer, asr_segments_from_result
 from .ffmpeg_tools import reencode_audio_to_opus, sha256_file
 from .manifest import append_jsonl, append_text, load_json, read_jsonl, write_json
-from .process_state import acquire_process_lock, read_live_pid, stop_process
-from .source_transcripts import process_sessions
+from .process_state import acquire_process_lock, hold_start_lock, read_live_pid, stop_process
+from .source_transcripts import process_sessions, processing_status
 
 
 @dataclass(slots=True)
@@ -108,6 +108,9 @@ class TranscriptionWorker:
             while not self._stop_event.is_set():
                 processed = self._poll_and_process(flush_partial=False)
                 if processed == 0:
+                    if read_live_pid(self.paths.pid_file) is None and self._finished():
+                        self.logger.info("no capture and no pending audio; exiting profile=%s", self.profile.name)
+                        break
                     self._stop_event.wait(self.profile.poll_seconds)
         finally:
             self._drain_pending()
@@ -200,6 +203,19 @@ class TranscriptionWorker:
         if commit_state:
             self._commit_processed(processed_count)
         return processed_count + source_count
+
+    def _finished(self) -> bool:
+        """Decide to exit under the start lock; keep holding it until this process exits."""
+        self._drain_pending()
+        lock = hold_start_lock(self.paths.state_root)
+        # Start may have launched a capture, or a capture may have left new
+        # audio, while this worker drained or waited for the lock.
+        if (read_live_pid(self.paths.pid_file) is not None
+                or processing_status(self.paths)[0]
+                or len(read_jsonl(self.paths.segments_manifest)) > self._read_cursor):
+            os.close(lock)
+            return False
+        return True
 
     def _batch_ready(self) -> bool:
         if len(self._pending) >= self.profile.batch_max_segments:

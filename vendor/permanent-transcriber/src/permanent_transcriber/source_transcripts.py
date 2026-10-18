@@ -15,6 +15,7 @@ from typing import Callable
 from .asr_backends import AsrBackend
 from .config import AppPaths
 from .manifest import load_json, write_json
+from .source_tracks import recording
 
 
 def words(text: str) -> list[tuple[str, int, int]]:
@@ -128,7 +129,8 @@ def processing_status(paths: AppPaths) -> tuple[bool, str | None]:
         capture_error = session / 'capture-error.txt'
         latest_error = (capture_error.read_text() if capture_error.exists()
                         else error.read_text() if error.exists() else None)
-        if not (session / 'transcribed').exists() and not error.exists() and not capture_error.exists():
+        # A failed recording still owes a transcript of its saved chunks.
+        if not (session / 'transcribed').exists() and not error.exists():
             pending = True
     return pending, latest_error
 
@@ -136,7 +138,7 @@ def processing_status(paths: AppPaths) -> tuple[bool, str | None]:
 def process_sessions(paths: AppPaths, backend: Callable[[], AsrBackend], failed: set[Path]) -> int:
     processed = 0
     for session in source_sessions(paths):
-        if session in failed or (session / 'capture-error.txt').exists():
+        if session in failed:
             continue
         if (session / 'transcribed').exists():
             continue
@@ -154,7 +156,8 @@ def process_sessions(paths: AppPaths, backend: Callable[[], AsrBackend], failed:
 def process_session(paths: AppPaths, session: Path, backend: Callable[[], AsrBackend]) -> int:
     # Read closed BEFORE the lists. If true, both encoder lists are final.
     # Reading it afterwards could finalize using a snapshot without the tail.
-    closed = (session / 'closed.json').exists()
+    # Clean stop, capture error and crash all end with the lock released.
+    closed = not recording(session)
     sources = [('microphone', 'Microphone'), ('system', 'Remote')]
     chunks = {source: completed_chunks(session / source) for source, _ in sources}
     metadata = {source: load_json(session / source / 'capture.json') for source, _ in sources}

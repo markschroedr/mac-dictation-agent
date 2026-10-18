@@ -2,11 +2,18 @@
 from __future__ import annotations
 
 from .manifest import write_json
+from .process_state import acquire_process_lock, read_live_pid
+import logging
 import subprocess
 import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+
+
+def recording(session: Path) -> bool:
+    """True while capture or one of its encoders can still add chunks to SESSION."""
+    return read_live_pid(session / "recording.lock") is not None
 
 
 class SourceTracks:
@@ -15,6 +22,10 @@ class SourceTracks:
             datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
         )
         self.root.mkdir(parents=True)
+        # Capture and every encoder share this lock. It is released only when
+        # all of them have exited, even after SIGKILL, so its release proves
+        # that both chunk lists are final. Lock before session.json exists.
+        self._lock = acquire_process_lock(self.root / "recording.lock", "recording")
         write_json(self.root / "session.json", {"mode": "source-tracks"})
         self.sample_rate = sample_rate
         self.streams: dict[str, tuple[subprocess.Popen, object]] = {}
@@ -43,14 +54,19 @@ class SourceTracks:
                     "-f", "segment", "-segment_time", "60", "-reset_timestamps", "1",
                     "-segment_list", str(folder / "chunks.csv"), "-segment_list_type", "csv",
                     str(folder / "%06d.opus"),
-                ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log)
+                ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=log, pass_fds=(self._lock,))
             except BaseException:
                 log.close()
                 raise
             self.streams[source] = (process, log)
         process, _ = self.streams[source]
         assert process.stdin is not None
+        began = time.monotonic()
         process.stdin.write(pcm)
+        blocked = time.monotonic() - began
+        if blocked >= 1.0:
+            # Evidence for capture stalls: a slow encoder blocks the capture loop.
+            logging.getLogger(__name__).warning("%s encoder write blocked for %.1fs", source, blocked)
 
     def close(self) -> None:
         errors = []

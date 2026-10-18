@@ -2451,6 +2451,11 @@ struct PermanentTranscriberStatus {
     var isRunning: Bool {
         captureRunning || quickRunning || relaxedRunning
     }
+
+    /// A live worker is processing only while saved audio is still untranscribed.
+    var isTranscribingSaved: Bool {
+        !captureRunning && (quickRunning || relaxedRunning) && sourcePending
+    }
 }
 
 struct PermanentTranscriberDevice {
@@ -3211,8 +3216,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             return
         }
         let status = permanentTranscriberStatus
-        // Processing is not recording: another Stop must not kill a draining worker.
-        guard status.captureRunning || !status.isRunning else { return }
+        // Without capture this is Start; a draining worker is reused, never stopped.
         permanentOperationInFlight = true
         permanentStopRequested = status.captureRunning
         applyPermanentTranscriberState(status)
@@ -3412,11 +3416,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func applyPermanentTranscriberState(_ status: PermanentTranscriberStatus) {
         isPermanentRecording = status.captureRunning && status.captureHealthy && !permanentStopRequested
-        isPermanentProcessing = permanentStopRequested || (!status.captureRunning && status.isRunning)
-        permanentTranscriberControlItem.isEnabled = !permanentOperationInFlight && (status.captureRunning || !status.isRunning)
+        isPermanentProcessing = permanentStopRequested || status.isTranscribingSaved
+        permanentTranscriberControlItem.isEnabled = !permanentOperationInFlight
         permanentTranscriberControlItem.title = permanentStopRequested
             ? "Stopping Continuous Recording…"
-            : (!status.captureRunning && status.isRunning ? "Processing Recording…" : (status.captureRunning ? "Stop Continuous Recording" : "Start Continuous Recording"))
+            : (status.captureRunning ? "Stop Continuous Recording" : "Start Continuous Recording")
         let workerStatus: String
         if status.quickRunning && status.relaxedRunning {
             workerStatus = "quick + canonical"
@@ -3430,9 +3434,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         if permanentStopRequested {
             permanentTranscriberStatusItem.title = status.captureRunning ? "Status: Stop requested" : "Status: Processing"
             permanentTranscriberStatusItem.toolTip = nil
-        } else if !status.captureRunning && status.isRunning {
-            permanentTranscriberStatusItem.title = "Status: Processing"
-            permanentTranscriberStatusItem.toolTip = nil
+        } else if status.isTranscribingSaved {
+            permanentTranscriberStatusItem.title = status.captureError == nil
+                ? "Status: Transcribing saved audio" : "Status: Recording failed - transcribing saved audio"
+            permanentTranscriberStatusItem.toolTip = status.captureError
         } else if status.captureRunning && status.captureHealthy {
             permanentTranscriberStatusItem.title = status.captureError == nil
                 ? "Status: Recording - \(workerStatus)" : "Status: Recording - transcription error"

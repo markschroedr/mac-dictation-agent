@@ -11,7 +11,7 @@ import typer
 
 from .capture_health import read_capture_health
 from .config import CaptureConfig, default_paths
-from .process_state import read_live_pid
+from .process_state import hold_start_lock, read_live_pid
 
 app = typer.Typer(help="Always-on local speech capture pipeline.")
 
@@ -153,7 +153,6 @@ def start(
 ) -> None:
     """Start capture and worker in the background."""
     from .capture import CaptureService
-    from .worker import TranscriptionWorker
 
     try:
         ensure_capture_launch_allowed()
@@ -163,6 +162,8 @@ def start(
     paths = default_paths()
     paths.ensure()
     config = build_config(paths, device)
+    # Held until this command exits: a worker cannot decide to exit meanwhile.
+    hold_start_lock(paths.state_root)
 
     capture_existing = CaptureService.read_pid(paths.pid_file)
     if capture_existing is not None:
@@ -173,18 +174,14 @@ def start(
     if quick and not config.include_system_audio:
         profiles.append("quick")
     profiles.append("relaxed")
-    for profile in profiles:
-        worker_existing = TranscriptionWorker(paths=paths, profile=profile).read_pid(
-            TranscriptionWorker(paths=paths, profile=profile).pid_file
-        )
-        if worker_existing is not None:
-            typer.echo(f"{profile} worker already running with pid {worker_existing}")
-            raise typer.Exit(1)
 
     worker_processes: dict[str, subprocess.Popen[bytes]] = {}
     capture_process: subprocess.Popen[bytes] | None = None
     try:
         for profile in profiles:
+            # A worker still transcribing an earlier recording takes this one too.
+            if read_live_pid(worker_pid_file(paths, profile)) is not None:
+                continue
             worker_cmd = [
                 sys.executable,
                 "-m",
@@ -230,11 +227,7 @@ def start(
                     capture_process.kill()
             except OSError:
                 pass
-        for profile in worker_processes:
-            try:
-                TranscriptionWorker(paths=paths, profile=profile).stop()
-            except Exception:
-                pass
+        # Workers stay: they transcribe what the failed capture saved, then exit.
         typer.echo(str(exc))
         raise typer.Exit(1)
     typer.echo(f"capture and workers started profiles={','.join(profiles)}")
@@ -260,7 +253,7 @@ def stop() -> None:
         typer.echo("Source transcription is unfinished; start the worker again to resume saved chunks")
         raise typer.Exit(1)
     if source_error:
-        typer.echo(f"source transcription failed: {source_error.strip()}")
+        typer.echo(source_error.strip())
         raise typer.Exit(1)
     if not capture_stopped and not any(worker_results.values()):
         typer.echo("capture and worker are not running")
