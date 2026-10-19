@@ -47,6 +47,7 @@ rsync -a \
   --exclude '.venv' \
   --exclude '__pycache__' \
   --exclude '.pytest_cache' \
+  --exclude '.ruff_cache' \
   --exclude 'tests' \
   --exclude '*.log' \
   "$SOURCE_ROOT/vendor/permanent-transcriber/" "$RUNTIME_ROOT/vendor/permanent-transcriber/"

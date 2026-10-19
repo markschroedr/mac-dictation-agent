@@ -1,10 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-10-19
+
+### Updates
 
 - Added daily and manual update checks, with user-selected installation of Ed25519-signed release archives.
 - Signed official builds with one stable self-made certificate. The first update from ad-hoc signing requires granting Microphone, Accessibility, and Screen & System Audio Recording permissions again.
 - Prepared updates before restarting through a detached installer, preserving the previous runtime for rollback. Active dictation and continuous recording block installation.
+
+### Recognition
+
+- Ran all recognition, including continuous recording and file transcription, on one app-owned FluidAudio model with Parakeet Ultra. Removed the separate MLX worker and the Parakeet v3 and Phonon-2 models.
+- Allowed a cold model load up to 600 seconds.
+
+### Continuous recording
+
+- Switched to the current default microphone when the input device stops delivering audio, for example after removing a Bluetooth headset, instead of ending the recording. The gap is kept as silence so both sources stay aligned.
+- Ended a recording on digital silence only at startup; a muted microphone no longer stops it.
+- Transcribed the saved audio of failed recordings instead of skipping it, and finalized sessions only after all encoders exited.
+- Stopped the transcription worker once nothing is pending, so the menu no longer stays in Processing. Start is always available and reuses a worker that is still finishing.
+- Kept the original capture error instead of a misleading follow-up error.
 
 ## 0.2.0 - 2026-10-06
 
