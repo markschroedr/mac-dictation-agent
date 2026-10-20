@@ -19,7 +19,14 @@ private final class FluidASRService {
         do {
             switch request.action {
             case .warmup:
-                _ = try await loadManager()
+                let manager = try await loadManager()
+                // Under memory pressure macOS drops the idle model's Neural Engine
+                // pages. One tiny inference pages them back in while the user is
+                // still speaking, instead of after they stop.
+                var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
+                let started = ContinuousClock.now
+                _ = try await manager.transcribe([Float](repeating: 0, count: 16_000), decoderState: &decoderState, language: nil)
+                log("warmup inference seconds=\(format(started.duration(to: .now)))")
                 return DictationServiceResponse(id: request.id)
             case .resetSession:
                 guard let sessionID = request.sessionID, !sessionID.isEmpty else {
