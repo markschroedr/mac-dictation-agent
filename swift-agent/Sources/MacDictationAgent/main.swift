@@ -625,6 +625,7 @@ final class LocalTTSClient {
     private var process: Process?
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
+    private var pendingOutput = Data()
     private var errorHandle: FileHandle?
     private var idleShutdownWorkItem: DispatchWorkItem?
     private var activityGeneration = 0
@@ -724,6 +725,50 @@ final class LocalTTSClient {
         clearProcessLocked()
     }
 
+    /// Single request owns the pipe until its final response. Never retry partially delivered audio.
+    func stream(
+        text: String, language: TTSLanguage, voiceID: String?,
+        cancelled: (() -> Bool)? = nil,
+        receive: (Data) throws -> Void
+    ) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        cancelIdleShutdownLocked()
+        defer { scheduleIdleShutdown() }
+        guard let language = LocalTTSLanguage(rawValue: language.rawValue) else {
+            throw LocalTTSClientError.requestFailed("Choose German or English")
+        }
+        do {
+            try ensureProcessLocked()
+            guard let inputHandle, let outputHandle else {
+                throw LocalTTSClientError.requestFailed("Worker pipes unavailable")
+            }
+            let request = LocalTTSServiceRequest(action: .stream, input: text, language: language, voice: voiceID)
+            var data = try JSONEncoder().encode(request)
+            data.append(0x0A)
+            try inputHandle.write(contentsOf: data)
+            while true {
+                let line = try readLine(from: outputHandle.fileDescriptor, timeout: 1_800, cancelled: cancelled)
+                let response = try JSONDecoder().decode(LocalTTSServiceResponse.self, from: line)
+                guard response.id == request.id else {
+                    throw LocalTTSClientError.requestFailed("Worker response mismatch")
+                }
+                if let error = response.error {
+                    throw LocalTTSClientError.serviceError(error)
+                }
+                guard let encoded = response.audio else { break }
+                guard let pcm = Data(base64Encoded: encoded), !pcm.isEmpty, pcm.count.isMultiple(of: 2) else {
+                    throw LocalTTSClientError.requestFailed("Invalid PCM from worker")
+                }
+                try receive(pcm)
+            }
+        } catch {
+            // Includes consumer cancellation: kill this request, never leave unread audio in the pipe.
+            restart(reason: "stream ended: \(error)")
+            throw error
+        }
+    }
+
     private func request(
         _ request: LocalTTSServiceRequest,
         timeout: Double
@@ -821,13 +866,19 @@ final class LocalTTSClient {
 
     private func readLine(
         from fileDescriptor: Int32,
-        timeout: Double
+        timeout: Double,
+        cancelled: (() -> Bool)? = nil
     ) throws -> Data {
         let deadline = CFAbsoluteTimeGetCurrent() + timeout
-        var accumulated = Data()
         var buffer = [UInt8](repeating: 0, count: 65_536)
 
-        while accumulated.count <= 1_048_576 {
+        while pendingOutput.count <= 1_048_576 {
+            if cancelled?() == true { throw CancellationError() }
+            if let newline = pendingOutput.firstIndex(of: 0x0A) {
+                let line = Data(pendingOutput[..<newline])
+                pendingOutput.removeSubrange(...newline)
+                return line
+            }
             let remaining = deadline - CFAbsoluteTimeGetCurrent()
             guard remaining > 0 else {
                 throw LocalTTSClientError.requestFailed(
@@ -840,13 +891,14 @@ final class LocalTTSClient {
                 revents: 0
             )
             let milliseconds = Int32(
-                min(Double(Int32.max), ceil(remaining * 1_000))
+                min(cancelled == nil ? Double(Int32.max) : 100, ceil(remaining * 1_000))
             )
             let pollResult = Darwin.poll(
                 &descriptor,
                 1,
                 milliseconds
             )
+            if pollResult == 0 && cancelled != nil { continue }
             if pollResult < 0 && errno == EINTR {
                 continue
             }
@@ -869,10 +921,7 @@ final class LocalTTSClient {
                     "\(configuration.displayName) service closed its response pipe"
                 )
             }
-            accumulated.append(buffer, count: bytesRead)
-            if let newline = accumulated.firstIndex(of: 0x0A) {
-                return Data(accumulated[..<newline])
-            }
+            pendingOutput.append(buffer, count: bytesRead)
         }
         throw LocalTTSClientError.requestFailed(
             "\(configuration.displayName) response exceeded 1 MB"
@@ -959,6 +1008,7 @@ final class LocalTTSClient {
         try? errorHandle?.close()
         inputHandle = nil
         outputHandle = nil
+        pendingOutput.removeAll()
         errorHandle = nil
         process = nil
     }
@@ -976,7 +1026,7 @@ extension LocalTTSClient: @unchecked Sendable {}
 final class ClipboardTTSManager {
     private let lock = NSLock()
     private var isRunning = false
-    private var latestPlayback: ProgressiveVLCPlayback?
+    private var latestPlayback: SpeechPlayback?
     private let queue = DispatchQueue(label: "com.markschroedr.mac-dictation.tts", qos: .userInitiated)
     private let supertonic = LocalTTSClient(
         configuration: LocalTTSClientConfiguration(
@@ -985,16 +1035,6 @@ final class ClipboardTTSManager {
             executable: supertonicTTSServiceExecutable,
             modelRoot: supertonicTTSModelRoot,
             modelRootEnvironmentVariable: "MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT"
-        )
-    )
-    private let phonon = LocalTTSClient(
-        configuration: LocalTTSClientConfiguration(
-            displayName: "Phonon 40M",
-            logName: "phonon-tts-service",
-            executable: phononTTSServiceExecutable,
-            modelRoot: phononTTSModelRoot,
-            // ptts resolves hf:// models through the Hugging Face cache.
-            modelRootEnvironmentVariable: "HF_HUB_CACHE"
         )
     )
 
@@ -1019,9 +1059,9 @@ final class ClipboardTTSManager {
                 logEvent("tts finished provider=\(provider.rawValue) selected_language=\(selectedLanguage.rawValue) chars=\(result.characterCount) chunks=\(result.chunkCount) open=\(result.openURL.path)")
                 completion(nil)
             } catch {
-                playErrorSound()
+                if !(error is CancellationError) { playErrorSound() }
                 logEvent("tts failed provider=\(provider.rawValue) error=\(error)")
-                completion(String(describing: error))
+                completion(error is CancellationError ? nil : String(describing: error))
             }
         }
     }
@@ -1073,19 +1113,22 @@ final class ClipboardTTSManager {
         try FileManager.default.createDirectory(at: ttsAudioDir, withIntermediateDirectories: true)
         let stamp = Self.timestamp()
         let languageLabel = language == effectiveLanguage ? language.rawValue : "\(language.rawValue)-\(effectiveLanguage.rawValue)"
-        let runDir = ttsAudioDir.appendingPathComponent("\(stamp)-\(provider.rawValue)-\(languageLabel)")
+        let runDir = ttsAudioDir.appendingPathComponent("\(stamp)-\(provider.rawValue)-\(languageLabel)-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
 
         let metrics = TTSRunMetrics(provider: provider)
+        if provider == .phonon {
+            return try generatePhonon(
+                text: sourceText, language: effectiveLanguage, voiceID: voiceID, play: play,
+                runDir: runDir, metrics: metrics, progress: progress
+            )
+        }
         let chunks = ProgressiveTTSChunker.chunks(
             text: sourceText,
             maximumCharacters: provider.maxChunkCharacters
         )
         let playback = play
-            ? try ProgressiveVLCPlayback(
-                metrics: metrics,
-                chunkCount: chunks.count
-            )
+            ? SpeechPlayback(metrics: metrics)
             : nil
         lock.lock()
         let previousPlayback = latestPlayback
@@ -1103,7 +1146,7 @@ final class ClipboardTTSManager {
             if index == 1 {
                 metrics.markFirstAudioReady()
             }
-            try playback?.accept(index: index, url: url)
+            playback?.accept(index: index, url: url)
         }
 
         let chunkFiles: [URL]
@@ -1153,7 +1196,7 @@ final class ClipboardTTSManager {
             playback?.abort(error: "Could not join TTS audio: \(error)")
             throw error
         }
-        playback?.finish(expectedChunkCount: chunkFiles.count)
+        playback?.finish()
         metrics.markGenerationCompleted()
         lock.lock()
         latestPlayback = playback
@@ -1185,8 +1228,7 @@ final class ClipboardTTSManager {
                 index: index,
                 extension: provider.audioExtension
             )
-            let client = provider == .phonon ? phonon : supertonic
-            let byteCount = try client.synthesize(
+            let byteCount = try supertonic.synthesize(
                 text: chunk,
                 language: language,
                 voiceID: voiceID,
@@ -1291,6 +1333,70 @@ final class ClipboardTTSManager {
         )
     }
 
+    private func generatePhonon(
+        text: String, language: TTSLanguage, voiceID: String?, play: Bool,
+        runDir: URL, metrics: TTSRunMetrics,
+        progress: (@Sendable (Int, Int) -> Void)?
+    ) throws -> TTSRunResult {
+        let playback = play ? SpeechPlayback(metrics: metrics) : nil
+        lock.lock()
+        let previous = latestPlayback
+        latestPlayback = playback
+        lock.unlock()
+        previous?.stop()
+        let outputURL = runDir.appendingPathComponent("audio.wav")
+        var completed = false
+        defer {
+            if !completed {
+                playback?.stop()
+                try? FileManager.default.removeItem(at: outputURL)
+            }
+        }
+        let output = try AVAudioFile(
+            forWriting: outputURL,
+            settings: [
+                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 24_000,
+                AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
+            ]
+        )
+        progress?(0, 1)
+        try PhononSpeech.shared.stream(text: text, language: language, voice: voiceID,
+                                       cancelled: { playback?.state == "stopped" }) { pcm in
+            metrics.markFirstAudioReady()
+            let buffer = try SpeechPCM.buffer(pcm)
+            try output.write(from: buffer)
+            try playback?.append(buffer)
+        }
+        playback?.finish()
+        metrics.markGenerationCompleted()
+        completed = true
+        progress?(1, 1)
+        return TTSRunResult(openURL: outputURL, runDir: runDir, chunkCount: 1,
+                            characterCount: text.count, metrics: metrics)
+    }
+
+    var playbackState: String {
+        lock.lock()
+        let playback = latestPlayback
+        lock.unlock()
+        return playback?.state ?? "stopped"
+    }
+
+    func pauseOrResumeSpeech() {
+        lock.lock()
+        let playback = latestPlayback
+        lock.unlock()
+        playback?.togglePause()
+    }
+
+    func stopSpeech() {
+        lock.lock()
+        let playback = latestPlayback
+        lock.unlock()
+        playback?.stop()
+    }
+
     func waitForPlayback() -> String? {
         lock.lock()
         let playback = latestPlayback
@@ -1302,9 +1408,10 @@ final class ClipboardTTSManager {
         lock.lock()
         let playback = latestPlayback
         lock.unlock()
+        stopSpeech()
         playback?.abort(error: "TTS manager shut down")
         supertonic.shutdown()
-        phonon.shutdown()
+        phononTTSClient.shutdown()
     }
 
     private func clipboardText() throws -> String {
@@ -2780,6 +2887,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let appStatusItem = NSMenuItem(title: "Ready", action: nil, keyEquivalent: "")
     private let quickTTSItem = NSMenuItem(title: "Quick Speak Clipboard…", action: #selector(speakClipboardQuick), keyEquivalent: "")
     private var quickVoiceItems: [QuickTTSPreset: NSMenuItem] = [:]
+    private let pauseSpeechItem = NSMenuItem(title: "Pause Speaking", action: #selector(toggleSpeechPause), keyEquivalent: "")
+    private let stopSpeechItem = NSMenuItem(title: "Stop Speaking", action: #selector(stopSpeaking), keyEquivalent: "")
     private let startAtLoginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin), keyEquivalent: "")
     private let soundEffectsItem = NSMenuItem(title: "Sound Effects", action: #selector(toggleSoundEffects), keyEquivalent: "")
     private let permanentTranscriberStatusItem = NSMenuItem(title: "Status: Stopped", action: nil, keyEquivalent: "")
@@ -2861,6 +2970,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         quickTTSItem.target = self
         menu.addItem(quickTTSItem)
         updateQuickVoice()
+        pauseSpeechItem.target = self
+        stopSpeechItem.target = self
+        menu.addItem(pauseSpeechItem)
+        menu.addItem(stopSpeechItem)
 
         let transcribeAudioFile = NSMenuItem(title: "Transcribe Audio File...", action: #selector(transcribeAudioFile), keyEquivalent: "")
         transcribeAudioFile.target = self
@@ -3071,6 +3184,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             return
         }
         updateQuickVoice()
+        updateTTSActionState()
         refreshRecentMenus()
         refreshMicrophoneMenu()
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
@@ -3129,6 +3243,16 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         RecoveryRetentionPreference.setHours(hours)
         updateRecoveryRetentionState()
         logEvent("dictation recovery retention selected hours=\(hours)")
+    }
+
+    @objc private func toggleSpeechPause() {
+        tts.pauseOrResumeSpeech()
+        updateTTSActionState()
+    }
+
+    @objc private func stopSpeaking() {
+        tts.stopSpeech()
+        updateTTSActionState()
     }
 
     @objc private func speakClipboardWithSupertonic() {
@@ -3417,6 +3541,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     private func updateTTSActionState() {
+        let state = tts.playbackState
+        pauseSpeechItem.title = state == "paused" ? "Resume Speaking" : "Pause Speaking"
+        pauseSpeechItem.isEnabled = state != "stopped"
+        stopSpeechItem.isEnabled = state != "stopped"
         for item in ttsActionItems.values {
             item.isEnabled = !isTTSProcessing
             item.toolTip = isTTSProcessing ? "Another speech generation is running" : nil

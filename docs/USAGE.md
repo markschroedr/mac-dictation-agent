@@ -103,6 +103,34 @@ XAI_API_KEY=...
 
 The app also reads these keys from its process environment. The installer preserves `tts.env` during updates.
 
+All voices use one native player. **Pause Speaking / Resume Speaking** and **Stop Speaking** live beside Quick Speak.
+Phonon plays incoming PCM immediately. Supertonic and cloud voices play their completed chunks in text order.
+The joined audio file remains in Recent Audio. Stop never resumes playback when later chunks finish.
+
+#### Local streaming speech API
+
+The running app serves Phonon on the same loopback port as transcription. Other programs receive audio; the app does not play API requests.
+
+```bash
+curl --fail-with-body http://127.0.0.1:8767/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"phonon","input":"Hallo, das ist ein lokaler Stream.","language":"auto","voice":"male","response_format":"pcm"}' \
+  --output speech.pcm
+
+ffplay -f s16le -ar 24000 -ch_layout mono speech.pcm
+```
+
+- Model: `phonon` or `phonon-40m`; default: `phonon`. This endpoint does not invoke cloud providers.
+- Language: `auto` (default), `de`/`german`, or `en`/`english`.
+- Voice: `default` or `male` (Henrik/Miles).
+- Format: `pcm` (s16le, mono, 24 kHz) or `wav` (default; streaming header with unknown length).
+- Responses use HTTP chunked transfer. WAV consumers must accept unknown RIFF/data lengths.
+- A second concurrent Phonon request returns HTTP 429. UI and API share one worker.
+- Closing the response cancels that synthesis. Client programs control their own playback.
+- A mid-stream failure closes the connection without the final HTTP chunk; clients must treat it as incomplete audio.
+- Input: 1–100,000 characters. The worker starts on demand and exits after 300 idle seconds.
+- The full input text arrives in one request; this MVP streams audio out, not incremental text in.
+
 ## Updates
 
 The app checks GitHub for updates once a day. Choose **Check for Updates…** to check now, then **Update to …** to install and restart. Finish dictation and stop continuous recording first.

@@ -3,6 +3,7 @@ import Foundation
 public enum LocalTTSServiceAction: String, Codable, Sendable {
     case health
     case synthesize
+    case stream
     case unload
     case shutdown
 }
@@ -41,6 +42,7 @@ public struct LocalTTSServiceResponse: Codable, Sendable {
     public let id: String
     public let outputPath: String?
     public let byteCount: Int?
+    public let audio: String?
     public let loadedLanguage: LocalTTSLanguage?
     public let loadSeconds: Double?
     public let synthesizeSeconds: Double?
@@ -50,6 +52,7 @@ public struct LocalTTSServiceResponse: Codable, Sendable {
         id: String,
         outputPath: String? = nil,
         byteCount: Int? = nil,
+        audio: String? = nil,
         loadedLanguage: LocalTTSLanguage? = nil,
         loadSeconds: Double? = nil,
         synthesizeSeconds: Double? = nil,
@@ -58,6 +61,7 @@ public struct LocalTTSServiceResponse: Codable, Sendable {
         self.id = id
         self.outputPath = outputPath
         self.byteCount = byteCount
+        self.audio = audio
         self.loadedLanguage = loadedLanguage
         self.loadSeconds = loadSeconds
         self.synthesizeSeconds = synthesizeSeconds

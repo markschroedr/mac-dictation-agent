@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import base64
 import gc
 import json
 import os
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 MAXIMUM_INPUT_CHARACTERS = 100_000
 # One dedicated 40M checkpoint per language; both are gated on Hugging Face.
@@ -43,22 +47,14 @@ class ModelRuntime:
         voice: str | None,
         output_path: Path,
     ) -> tuple[int, float | None, float]:
-        if voice not in SUPPORTED_VOICES:
-            raise ValueError(f"unsupported voice: {voice}")
-        load_seconds = self._load(language)
-        tts = self._models[language]
-
+        load_seconds, tts, voice_name = self._prepare(language, voice)
         started = time.monotonic()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = output_path.with_name(
             f".{output_path.stem}.{uuid.uuid4().hex}.wav"
         )
         try:
-            tts.save(
-                str(temporary_path),
-                text,
-                voice=MALE_VOICES[language] if voice == "male" else None,
-            )
+            tts.save(str(temporary_path), text, voice=voice_name)
             os.replace(temporary_path, output_path)
         finally:
             temporary_path.unlink(missing_ok=True)
@@ -68,22 +64,52 @@ class ModelRuntime:
             time.monotonic() - started,
         )
 
+    def stream(
+        self,
+        *,
+        text: str,
+        language: str,
+        voice: str | None,
+        emit: Callable[[bytes], None],
+    ) -> tuple[int, float | None, float]:
+        """Emit mono s16le PCM at the model sample rate while it is generated."""
+        load_seconds, tts, voice_name = self._prepare(language, voice)
+        started = time.monotonic()
+        byte_count = 0
+        with tts.stream(text, voice=voice_name) as audio:
+            if audio.sample_rate != 24_000:
+                raise ValueError(f"unexpected sample rate: {audio.sample_rate}")
+            for chunk in audio:
+                samples = np.asarray(chunk, dtype=np.float32).ravel()
+                pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+                byte_count += len(pcm)
+                emit(pcm)
+        return byte_count, load_seconds, time.monotonic() - started
+
     def unload(self) -> None:
         self._models.clear()
         gc.collect()
 
-    def _load(self, language: str) -> float | None:
-        if language in self._models:
-            return None
-        import ptts
+    def _prepare(
+        self,
+        language: str,
+        voice: str | None,
+    ) -> tuple[float | None, Any, str | None]:
+        if voice not in SUPPORTED_VOICES:
+            raise ValueError(f"unsupported voice: {voice}")
+        load_seconds = None
+        if language not in self._models:
+            import ptts
 
-        started = time.monotonic()
-        self._models[language] = ptts.TTS(
-            _model_source(language),
-            lang=MODELS[language][1],
-            quant="q8",
-        )
-        return time.monotonic() - started
+            started = time.monotonic()
+            self._models[language] = ptts.TTS(
+                _model_source(language),
+                lang=MODELS[language][1],
+                quant="q8",
+            )
+            load_seconds = time.monotonic() - started
+        voice_name = MALE_VOICES[language] if voice == "male" else None
+        return load_seconds, self._models[language], voice_name
 
 
 def _response(request_id: str, **values: Any) -> dict[str, Any]:
@@ -95,6 +121,7 @@ def _response(request_id: str, **values: Any) -> dict[str, Any]:
 def _handle_request(
     runtime: ModelRuntime,
     request: dict[str, Any],
+    write: Callable[[dict[str, Any]], None],
 ) -> tuple[dict[str, Any], bool]:
     request_id = str(request.get("id") or "unknown")
     action = request.get("action")
@@ -105,28 +132,35 @@ def _handle_request(
         return _response(request_id), False
     if action == "shutdown":
         return _response(request_id), True
-    if action != "synthesize":
+    if action not in ("synthesize", "stream"):
         return _response(request_id, error=f"unsupported action: {action}"), False
 
     try:
         text = str(request.get("input") or "").strip()
         if not text:
-            raise ValueError("synthesize requires non-empty input")
+            raise ValueError(f"{action} requires non-empty input")
         if len(text) > MAXIMUM_INPUT_CHARACTERS:
             raise ValueError(f"input exceeds {MAXIMUM_INPUT_CHARACTERS} characters")
         language = str(request.get("language") or "")
         if language not in MODELS:
             raise ValueError(f"unsupported language: {language}")
-        output_path = str(request.get("outputPath") or "")
-        if not output_path:
-            raise ValueError("synthesize requires outputPath")
+        voice = request.get("voice")
+        output_path = None
+        if action == "stream":
+            # Audio lines carry the request id and precede its final response line.
+            def emit(pcm: bytes) -> None:
+                write(_response(request_id, audio=base64.b64encode(pcm).decode("ascii")))
 
-        byte_count, load_seconds, synthesize_seconds = runtime.synthesize(
-            text=text,
-            language=language,
-            voice=request.get("voice"),
-            output_path=Path(output_path),
-        )
+            byte_count, load_seconds, seconds = runtime.stream(
+                text=text, language=language, voice=voice, emit=emit
+            )
+        else:
+            output_path = str(request.get("outputPath") or "")
+            if not output_path:
+                raise ValueError("synthesize requires outputPath")
+            byte_count, load_seconds, seconds = runtime.synthesize(
+                text=text, language=language, voice=voice, output_path=Path(output_path)
+            )
         return (
             _response(
                 request_id,
@@ -134,7 +168,7 @@ def _handle_request(
                 byteCount=byte_count,
                 loadedLanguage=language,
                 loadSeconds=load_seconds,
-                synthesizeSeconds=synthesize_seconds,
+                synthesizeSeconds=seconds,
             ),
             False,
         )
@@ -153,6 +187,11 @@ def main() -> None:
     # stdout carries the JSON-lines protocol; keep library output on stderr.
     protocol = sys.stdout
     sys.stdout = sys.stderr
+
+    def write(response: dict[str, Any]) -> None:
+        protocol.write(json.dumps(response, separators=(",", ":")) + "\n")
+        protocol.flush()
+
     runtime = ModelRuntime()
     try:
         for line in sys.stdin:
@@ -163,11 +202,10 @@ def main() -> None:
                 request = json.loads(line)
                 if not isinstance(request, dict):
                     raise TypeError("request must be a JSON object")
-                response, should_stop = _handle_request(runtime, request)
+                response, should_stop = _handle_request(runtime, request, write)
             except Exception as error:  # noqa: BLE001 - preserve worker process
                 response, should_stop = _response("unknown", error=str(error)), False
-            protocol.write(json.dumps(response, separators=(",", ":")) + "\n")
-            protocol.flush()
+            write(response)
             if should_stop:
                 break
     finally:

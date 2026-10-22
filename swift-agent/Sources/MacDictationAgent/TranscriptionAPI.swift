@@ -57,7 +57,11 @@ final class TranscriptionAPIServer: @unchecked Sendable {
                 self.respond(connection, .error(status, message))
             case .complete(let request):
                 DispatchQueue.global(qos: .userInitiated).async {
-                    self.respond(connection, self.handle(request))
+                    if request.method == "POST" && request.path == "/v1/audio/speech" {
+                        streamPhononHTTP(body: request.body, connection: connection)
+                    } else {
+                        self.respond(connection, self.handle(request))
+                    }
                 }
             }
         }
