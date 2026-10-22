@@ -1,5 +1,14 @@
 # Usage and development
 
+## Menu
+
+- **Transkription:** shared model; dictation shortcuts, microphone and recovery retention; continuous recording controls and sources.
+- **Text to Speech:** clipboard speech, voice, language, provider setup and saved audio.
+- **Transkripte:** dictations, one continuous recording list, and transcribed files.
+- **Allgemein:** sound effects, login startup, updates, diagnostics and the data folder.
+
+Continuous transcript pages combine session transcripts and legacy hourly transcripts without moving files. Legacy canonical and quick outputs for the same hour appear once, preferring a nonempty canonical result. Each page shows 5 entries.
+
 ## Long dictation
 
 Hold Control+Shift to record. Hold Option before releasing the shortcut to lock recording. Press Control+Shift again to stop.
@@ -20,15 +29,15 @@ macOS asks for Screen & System Audio Recording permission on first use. If a sou
 
 ## Sound effects
 
-Start, stop, and error sounds are off by default. Turn them on under **Settings → Sound Effects**.
+Start, stop, and error sounds are off by default. Turn them on under **Allgemein → Soundeffekte**.
 
 ## Recover a dictation
 
-Choose **Open Dictation Recovery** from the menu. Each session directory contains ordered `chunk-*.wav` files and an incremental `transcript.txt`. The files exist even when transcription returns no text or the app exits before completion.
+Choose **Transkription → Rettungsordner öffnen** from the menu. Each session directory contains ordered `chunk-*.wav` files and an incremental `transcript.txt`. The files exist even when transcription returns no text or the app exits before completion.
 
-Choose **Transcribe Audio File...** to transcribe a recovered chunk manually. The app does not combine or retranscribe recovery chunks automatically.
+Choose **Transkription → Audiodatei transkribieren …** to transcribe a recovered chunk manually. The app does not combine or retranscribe recovery chunks automatically.
 
-The app keeps recovery sessions for 24 hours by default. Change the window under **Settings → Recovery Audio Retention**. You can choose 24 hours, 7 days, 30 days, or forever. Expired sessions go to macOS Trash.
+The app keeps recovery sessions for 24 hours by default. Change the window under **Transkription → Audio aufbewahren**. You can choose 24 hours, 7 days, 30 days, or forever. Expired sessions go to macOS Trash.
 
 A crash can leave the current WAV header incomplete. Earlier finalized chunks remain recoverable. This design reduces loss, but it does not make an in-progress WAV crash-proof or prevent microphone input from stopping.
 
@@ -57,12 +66,12 @@ The Python environments use about 1 GB. Models download on first use. Keep rough
 
 ### Continuous transcription
 
-Choose a microphone and mode from the menu, then start continuous transcription. Microphone and system audio are included by default. Turn off **Include System Audio** before starting when you want microphone-only capture. macOS requests Screen & System Audio Recording permission the first time.
+Choose a microphone and mode from the menu, then start continuous transcription. Microphone and system audio are included by default. Turn off **Transkription → Systemaudio aufnehmen** before starting when you want microphone-only capture. macOS requests Screen & System Audio Recording permission the first time.
 
-- **Canonical Only** writes larger durable batches, speaker-labelled variants, and compacted archival audio.
-- **Quick + Canonical** also writes smaller provisional batches.
+- **Nur Qualität** writes larger durable batches, speaker-labelled variants, and compacted archival audio.
+- **Live + Qualität** also writes smaller provisional batches.
 
-Its workers wake every 3 seconds and process canonical batches of up to 5 minutes through the same FluidAudio model as dictation. Choose the model for all workflows under **Settings → Transcription Model**. Background batches yield between 20-second windows so dictation does not wait behind the backlog. Keep the app running while workers drain. On shutdown, each worker drains the segments already in its manifest.
+Its workers wake every 3 seconds and process canonical batches of up to 5 minutes through the same FluidAudio model as dictation. Choose the model for all workflows under **Transkription → Modell**. Background batches yield between 20-second windows so dictation does not wait behind the backlog. Keep the app running while workers drain. On shutdown, each worker drains the segments already in its manifest.
 
 Sortformer diarization streams 5-second chunks with a 2 GiB MLX working-memory limit. This is a library limit, not an OS memory sandbox.
 
@@ -74,7 +83,7 @@ Capture data lives in:
 
 ### Files and batches
 
-Choose **Transcribe Audio or Video…** from the menu. For a folder:
+Choose **Transkription → Audiodatei transkribieren …** from the menu. For a folder:
 
 ```bash
 bash "$HOME/Library/Application Support/Mac Dictation Agent/runtime/scripts/batch_transcribe.sh" \

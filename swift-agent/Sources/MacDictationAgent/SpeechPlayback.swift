@@ -30,6 +30,7 @@ enum SpeechPCM {
 
 struct SpeechPlaybackSnapshot {
     let title: String
+    let subtitle: String
     let position: Double
     let duration: Double
     let playing: Bool
@@ -48,6 +49,7 @@ final class SpeechPlayback: @unchecked Sendable {
     private let player = AVAudioPlayerNode()
     private let metrics: TTSRunMetrics
     private let title: String
+    private let subtitle: String
     private let archiveURL: URL
     private let spoolDirectory: URL
     private let spoolURL: URL
@@ -69,9 +71,10 @@ final class SpeechPlayback: @unchecked Sendable {
     private var nextFile = 1
     private var decodeFailure: Error?
 
-    init(metrics: TTSRunMetrics, title: String, archiveURL: URL, autoplay: Bool) throws {
+    init(metrics: TTSRunMetrics, title: String, subtitle: String, archiveURL: URL, autoplay: Bool) throws {
         self.metrics = metrics
         self.title = title
+        self.subtitle = subtitle
         self.archiveURL = archiveURL
         playing = autoplay
         spoolDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("speech-\(UUID().uuidString)")
@@ -87,7 +90,7 @@ final class SpeechPlayback: @unchecked Sendable {
     var snapshot: SpeechPlaybackSnapshot {
         audio.sync {
             SpeechPlaybackSnapshot(
-                title: title, position: Double(positionFrame) / 24_000, duration: Double(totalFrames) / 24_000,
+                title: title, subtitle: subtitle, position: Double(positionFrame) / 24_000, duration: Double(totalFrames) / 24_000,
                 playing: playing, generating: !complete && failure == nil,
                 replay: complete && !playing && !paused,
                 visible: endedAt.map { Date().timeIntervalSince($0) < 60 } ?? true,

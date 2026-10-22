@@ -121,10 +121,10 @@ func logEvent(_ message: String) {
 
 enum RecoveryRetentionPreference {
     static let choices: [(hours: Int, title: String)] = [
-        (24, "24 Hours"),
-        (24 * 7, "7 Days"),
-        (24 * 30, "30 Days"),
-        (0, "Forever"),
+        (24, "24 Stunden"),
+        (24 * 7, "7 Tage"),
+        (24 * 30, "30 Tage"),
+        (0, "Dauerhaft"),
     ]
 
     static var hours: Int {
@@ -244,9 +244,9 @@ enum TTSProvider: String, Sendable {
     var displayName: String {
         switch self {
         case .supertonic:
-            return "Supertonic 3 (local)"
+            return "Supertonic 3"
         case .phonon:
-            return "Phonon 40M (local)"
+            return "Phonon 40M"
         case .inworld:
             return "Inworld"
         case .xai:
@@ -322,11 +322,11 @@ enum TTSLanguage: String, CaseIterable, Sendable {
     var displayName: String {
         switch self {
         case .auto:
-            return "Auto"
+            return "Automatisch"
         case .english:
-            return "English"
+            return "Englisch"
         case .german:
-            return "German"
+            return "Deutsch"
         }
     }
 
@@ -447,11 +447,11 @@ enum QuickTTSPreset: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .supertonicM1: return "Supertonic 3 — M1 (local)"
-        case .phononDefault: return "Phonon 40M — Default Voice (local)"
-        case .phononMale: return "Phonon 40M — Male Voice (local)"
-        case .inworldConfigured: return "Inworld — Configured Voice (cloud)"
-        case .xaiLeo: return "Grok/xAI — Leo (cloud)"
+        case .supertonicM1: return "Supertonic 3 — M1 (lokal)"
+        case .phononDefault: return "Phonon 40M — Standard (lokal)"
+        case .phononMale: return "Phonon 40M — männlich (lokal)"
+        case .inworldConfigured: return "Inworld — konfigurierte Stimme (Cloud)"
+        case .xaiLeo: return "Grok/xAI — Leo (Cloud)"
         }
     }
 
@@ -1098,6 +1098,7 @@ final class ClipboardTTSManager {
         try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
         let metrics = TTSRunMetrics(provider: provider)
         let playback = try SpeechPlayback(metrics: metrics, title: provider.displayName,
+                                          subtitle: "\(effectiveLanguage.displayName) · \(provider.isLocal ? "Lokal" : "Cloud")",
                                           archiveURL: runDir.appendingPathComponent("audio.mp3"), autoplay: play)
         lock.lock()
         let previous = latestPlayback
@@ -2461,9 +2462,9 @@ enum PermanentTranscriberMode: String, CaseIterable {
     var displayName: String {
         switch self {
         case .relaxedOnly:
-            return "Canonical Only"
+            return "Nur Qualität"
         case .quickAndRelaxed:
-            return "Quick + Canonical"
+            return "Live + Qualität"
         }
     }
 
@@ -2773,32 +2774,33 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let permanentTranscriber: PermanentTranscriberController
     let updater = AppUpdater()
     private let statusItem: NSStatusItem
-    private let appStatusItem = NSMenuItem(title: "Ready", action: nil, keyEquivalent: "")
+    private let appStatusItem = NSMenuItem()
+    private let headerStatusView = MenuStatusView()
+    private let continuousStatusView = MenuStatusView()
     private let quickTTSItem = NSMenuItem(title: "Quick Speak Clipboard…", action: #selector(speakClipboardQuick), keyEquivalent: "")
     private var quickVoiceItems: [QuickTTSPreset: NSMenuItem] = [:]
+    private let quickVoiceItem = NSMenuItem(title: "Stimme", action: nil, keyEquivalent: "")
     private let speechPlayerItem = NSMenuItem()
     private let speechPlayerSeparator = NSMenuItem.separator()
     private var speechPlayerView: SpeechMenuView?
     private var speechPlayerTimer: Timer?
-    private let startAtLoginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin), keyEquivalent: "")
-    private let soundEffectsItem = NSMenuItem(title: "Sound Effects", action: #selector(toggleSoundEffects), keyEquivalent: "")
+    private let startAtLoginItem = NSMenuItem(title: "Beim Anmelden starten", action: #selector(toggleStartAtLogin), keyEquivalent: "")
+    private let soundEffectsItem = NSMenuItem(title: "Soundeffekte", action: #selector(toggleSoundEffects), keyEquivalent: "")
     private let permanentTranscriberStatusItem = NSMenuItem(title: "Status: Stopped", action: nil, keyEquivalent: "")
-    private let permanentTranscriberModeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
+    private let permanentTranscriberModeItem = NSMenuItem(title: "Verarbeitung", action: nil, keyEquivalent: "")
     private let permanentTranscriberControlItem = NSMenuItem(title: "Start Continuous Recording", action: #selector(togglePermanentTranscriber), keyEquivalent: "")
-    private let permanentTranscriberDeviceItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+    private let permanentTranscriberDeviceItem = NSMenuItem(title: "Mikrofon", action: nil, keyEquivalent: "")
     private let permanentSystemAudioItem = NSMenuItem(
-        title: "Include System Audio",
+        title: "Systemaudio aufnehmen",
         action: #selector(togglePermanentSystemAudio),
         keyEquivalent: ""
     )
-    private let openPermanentFolderItem = NSMenuItem(title: "Open Recording Folder", action: #selector(openPermanentTranscriberFolder), keyEquivalent: "")
-    private let recentDictationsItem = NSMenuItem(title: "Dictations", action: nil, keyEquivalent: "")
-    private let recentPermanentRelaxedItem = NSMenuItem(title: "Continuous - Canonical", action: nil, keyEquivalent: "")
-    private let recentPermanentQuickItem = NSMenuItem(title: "Continuous - Quick", action: nil, keyEquivalent: "")
-    private let recentParticipantsItem = NSMenuItem(title: "Continuous - Sources", action: nil, keyEquivalent: "")
-    private let recentManualItem = NSMenuItem(title: "Audio Files", action: nil, keyEquivalent: "")
-    private let recentTTSAudioItem = NSMenuItem(title: "Recent Audio", action: nil, keyEquivalent: "")
-    private let microphoneItem = NSMenuItem(title: "Dictation Microphone", action: nil, keyEquivalent: "")
+    private let openPermanentFolderItem = NSMenuItem(title: "Aufnahmeordner öffnen", action: #selector(openPermanentTranscriberFolder), keyEquivalent: "")
+    private let recentDictationsItem = NSMenuItem(title: "Diktate", action: nil, keyEquivalent: "")
+    private let recentContinuousItem = NSMenuItem(title: "Kontinuierliche Aufnahmen", action: nil, keyEquivalent: "")
+    private let recentManualItem = NSMenuItem(title: "Audiodateien", action: nil, keyEquivalent: "")
+    private let recentTTSAudioItem = NSMenuItem(title: "Gespeicherte Audios", action: nil, keyEquivalent: "")
+    private let microphoneItem = NSMenuItem(title: "Mikrofon", action: nil, keyEquivalent: "")
     private let recoveryRetentionItem = NSMenuItem(title: "Recovery Audio Retention", action: nil, keyEquivalent: "")
     private var recoveryRetentionItems: [Int: NSMenuItem] = [:]
     private let dictationModelItem = NSMenuItem(title: "Transcription Model", action: nil, keyEquivalent: "")
@@ -2806,6 +2808,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     var onDictationModelChange: (() -> Void)?
     private let ttsStatusItem = NSMenuItem(title: "TTS: Idle", action: nil, keyEquivalent: "")
     private var ttsActionItems: [TTSProvider: NSMenuItem] = [:]
+    private let ttsLanguageItem = NSMenuItem(title: "Sprache", action: nil, keyEquivalent: "")
     private var ttsLanguageItems: [TTSLanguage: NSMenuItem] = [:]
     private var permanentModeItems: [PermanentTranscriberMode: NSMenuItem] = [:]
     private let menuDataQueue = DispatchQueue(label: "com.markschroedr.mac-dictation.menu-data", qos: .utility)
@@ -2845,7 +2848,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func configure() {
         updateStatusIcon()
-
         let menu = NSMenu()
         menu.delegate = self
         let playerView = SpeechMenuView(
@@ -2859,102 +2861,54 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(speechPlayerItem)
         menu.addItem(speechPlayerSeparator)
         refreshSpeechPlayer()
-        let title = NSMenuItem(title: "Mac Dictation Agent", action: nil, keyEquivalent: "")
-        title.isEnabled = false
-        menu.addItem(title)
-        appStatusItem.isEnabled = false
+        appStatusItem.view = headerStatusView
         menu.addItem(appStatusItem)
-        let hint = NSMenuItem(title: "Dictate: Control+Shift · Mic + System: Control+Command", action: nil, keyEquivalent: "")
-        hint.isEnabled = false
-        menu.addItem(hint)
         menu.addItem(.separator())
 
-        quickTTSItem.target = self
-        menu.addItem(quickTTSItem)
-        updateQuickVoice()
-
-        let transcribeAudioFile = NSMenuItem(title: "Transcribe Audio File...", action: #selector(transcribeAudioFile), keyEquivalent: "")
-        transcribeAudioFile.target = self
-        menu.addItem(transcribeAudioFile)
-
-        let speakClipboardItem = NSMenuItem(title: "Speak Clipboard", action: nil, keyEquivalent: "")
-        let speakClipboardMenu = NSMenu()
-        let speakSupertonic = NSMenuItem(
-            title: "Speak with Supertonic 3",
-            action: #selector(speakClipboardWithSupertonic),
-            keyEquivalent: ""
-        )
-        speakSupertonic.target = self
-        speakClipboardMenu.addItem(speakSupertonic)
-        ttsActionItems[.supertonic] = speakSupertonic
-
-        let speakPhonon = NSMenuItem(
-            title: "Speak with Phonon 40M",
-            action: #selector(speakClipboardWithPhonon),
-            keyEquivalent: ""
-        )
-        speakPhonon.target = self
-        speakClipboardMenu.addItem(speakPhonon)
-        ttsActionItems[.phonon] = speakPhonon
-
-        let speakInworld = NSMenuItem(title: "Speak with Inworld", action: #selector(speakClipboardWithInworld), keyEquivalent: "")
-        speakInworld.target = self
-        speakClipboardMenu.addItem(speakInworld)
-        ttsActionItems[.inworld] = speakInworld
-
-        let speakXAI = NSMenuItem(title: "Speak with Grok/xAI", action: #selector(speakClipboardWithXAI), keyEquivalent: "")
-        speakXAI.target = self
-        speakClipboardMenu.addItem(speakXAI)
-        ttsActionItems[.xai] = speakXAI
-
-        speakClipboardMenu.addItem(.separator())
-        let quickVoice = NSMenuItem(title: "Quick Voice", action: nil, keyEquivalent: "")
-        let quickVoiceMenu = NSMenu()
-        for preset in QuickTTSPreset.allCases {
-            let item = NSMenuItem(title: preset.displayName, action: #selector(selectQuickVoice), keyEquivalent: "")
+        let transcription = NSMenuItem(title: "Transkription", action: nil, keyEquivalent: "")
+        transcription.image = NSImage(systemSymbolName: "mic", accessibilityDescription: nil)
+        let transcriptionMenu = NSMenu()
+        let modelMenu = NSMenu()
+        for model in DictationModel.allCases {
+            let item = NSMenuItem(title: model.displayName, action: #selector(selectDictationModel), keyEquivalent: "")
             item.target = self
-            item.representedObject = preset.rawValue
-            quickVoiceMenu.addItem(item)
-            quickVoiceItems[preset] = item
+            item.representedObject = model.rawValue
+            modelMenu.addItem(item)
+            dictationModelItems[model] = item
         }
-        quickVoice.submenu = quickVoiceMenu
-        speakClipboardMenu.addItem(quickVoice)
-        let setup = NSMenuItem(title: "Set Up Voices and API Keys…", action: #selector(openTTSSetup), keyEquivalent: "")
-        setup.target = self
-        speakClipboardMenu.addItem(setup)
-        let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
-        let languageMenu = NSMenu()
-        for language in TTSLanguage.allCases {
-            let item = NSMenuItem(title: language.displayName, action: #selector(selectTTSLanguage), keyEquivalent: "")
+        dictationModelItem.submenu = modelMenu
+        transcriptionMenu.addItem(dictationModelItem)
+        transcriptionMenu.addItem(.separator())
+        transcriptionMenu.addItem(.sectionHeader(title: "Diktieren"))
+        for (title, chord) in [("Nur Mikrofon", "⌃ ⇧"), ("Mikrofon + Systemaudio", "⌃ ⌘")] {
+            let hint = NSMenuItem()
+            hint.view = DictationShortcutView(title: title, chord: chord)
+            transcriptionMenu.addItem(hint)
+        }
+        transcriptionMenu.addItem(microphoneItem)
+        let retentionMenu = NSMenu()
+        for choice in RecoveryRetentionPreference.choices {
+            let item = NSMenuItem(title: choice.title, action: #selector(selectRecoveryRetention), keyEquivalent: "")
             item.target = self
-            item.representedObject = language.rawValue
-            languageMenu.addItem(item)
-            ttsLanguageItems[language] = item
+            item.representedObject = choice.hours
+            retentionMenu.addItem(item)
+            recoveryRetentionItems[choice.hours] = item
         }
-        languageItem.submenu = languageMenu
-        speakClipboardMenu.addItem(languageItem)
+        recoveryRetentionItem.submenu = retentionMenu
+        transcriptionMenu.addItem(recoveryRetentionItem)
+        let recovery = NSMenuItem(title: "Rettungsordner öffnen", action: #selector(openRecoveryFolder), keyEquivalent: "")
+        recovery.target = self
+        transcriptionMenu.addItem(recovery)
 
-        ttsStatusItem.isEnabled = false
-        ttsStatusItem.isHidden = true
-        speakClipboardMenu.addItem(ttsStatusItem)
-
-        speakClipboardMenu.addItem(.separator())
-        speakClipboardMenu.addItem(recentTTSAudioItem)
-
-        let openAudioFolder = NSMenuItem(title: "Open Audio Folder", action: #selector(openTTSAudioFolder), keyEquivalent: "")
-        openAudioFolder.target = self
-        speakClipboardMenu.addItem(openAudioFolder)
-        speakClipboardItem.submenu = speakClipboardMenu
-        menu.addItem(speakClipboardItem)
-
-        let continuousRecordingItem = NSMenuItem(title: "Continuous Recording", action: nil, keyEquivalent: "")
-        let continuousRecordingMenu = NSMenu()
+        transcriptionMenu.addItem(.separator())
+        transcriptionMenu.addItem(.sectionHeader(title: "Kontinuierlich"))
         permanentTranscriberControlItem.target = self
-        continuousRecordingMenu.addItem(permanentTranscriberControlItem)
-        permanentTranscriberStatusItem.isEnabled = false
-        continuousRecordingMenu.addItem(permanentTranscriberStatusItem)
-        continuousRecordingMenu.addItem(.separator())
-
+        transcriptionMenu.addItem(permanentTranscriberControlItem)
+        permanentTranscriberStatusItem.view = continuousStatusView
+        transcriptionMenu.addItem(permanentTranscriberStatusItem)
+        transcriptionMenu.addItem(permanentTranscriberDeviceItem)
+        permanentSystemAudioItem.target = self
+        transcriptionMenu.addItem(permanentSystemAudioItem)
         let modeMenu = NSMenu()
         for mode in PermanentTranscriberMode.allCases {
             let item = NSMenuItem(title: mode.displayName, action: #selector(selectPermanentTranscriberMode), keyEquivalent: "")
@@ -2964,98 +2918,111 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             permanentModeItems[mode] = item
         }
         permanentTranscriberModeItem.submenu = modeMenu
-        continuousRecordingMenu.addItem(permanentTranscriberModeItem)
-        continuousRecordingMenu.addItem(permanentTranscriberDeviceItem)
-        permanentSystemAudioItem.target = self
-        continuousRecordingMenu.addItem(permanentSystemAudioItem)
-
-        continuousRecordingMenu.addItem(.separator())
+        transcriptionMenu.addItem(permanentTranscriberModeItem)
         openPermanentFolderItem.target = self
-        continuousRecordingMenu.addItem(openPermanentFolderItem)
-        continuousRecordingItem.submenu = continuousRecordingMenu
-        menu.addItem(continuousRecordingItem)
+        transcriptionMenu.addItem(openPermanentFolderItem)
+        transcriptionMenu.addItem(.separator())
+        let audioFile = NSMenuItem(title: "Audiodatei transkribieren …", action: #selector(transcribeAudioFile), keyEquivalent: "")
+        audioFile.target = self
+        transcriptionMenu.addItem(audioFile)
+        transcription.submenu = transcriptionMenu
+        menu.addItem(transcription)
 
-        menu.addItem(.separator())
-
-        let recentTranscriptsItem = NSMenuItem(title: "Recent Transcripts", action: nil, keyEquivalent: "")
-        let recentTranscriptsMenu = NSMenu()
-        recentTranscriptsMenu.addItem(recentDictationsItem)
-        recentTranscriptsMenu.addItem(recentManualItem)
-        recentTranscriptsMenu.addItem(.separator())
-        recentTranscriptsMenu.addItem(recentPermanentRelaxedItem)
-        recentTranscriptsMenu.addItem(recentPermanentQuickItem)
-        recentTranscriptsMenu.addItem(recentParticipantsItem)
-        recentTranscriptsItem.submenu = recentTranscriptsMenu
-        menu.addItem(recentTranscriptsItem)
-
-        let openRecoveryFolder = NSMenuItem(title: "Open Dictation Recovery", action: #selector(openRecoveryFolder), keyEquivalent: "")
-        openRecoveryFolder.target = self
-        menu.addItem(openRecoveryFolder)
-
-        let openDataFolder = NSMenuItem(title: "Open Data Folder", action: #selector(openDataFolder), keyEquivalent: "")
-        openDataFolder.target = self
-        menu.addItem(openDataFolder)
-
-        menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
-        let settingsMenu = NSMenu()
-        settingsMenu.addItem(microphoneItem)
-
-        let dictationModelMenu = NSMenu()
-        for model in DictationModel.allCases {
-            let item = NSMenuItem(title: model.displayName, action: #selector(selectDictationModel), keyEquivalent: "")
+        let speech = NSMenuItem(title: "Text to Speech", action: nil, keyEquivalent: "")
+        speech.image = NSImage(systemSymbolName: "speaker.wave.2", accessibilityDescription: nil)
+        let speechMenu = NSMenu()
+        quickTTSItem.target = self
+        speechMenu.addItem(quickTTSItem)
+        let voices = NSMenu()
+        for preset in QuickTTSPreset.allCases {
+            let item = NSMenuItem(title: preset.displayName, action: #selector(selectQuickVoice), keyEquivalent: "")
             item.target = self
-            item.representedObject = model.rawValue
-            dictationModelMenu.addItem(item)
-            dictationModelItems[model] = item
+            item.representedObject = preset.rawValue
+            voices.addItem(item)
+            quickVoiceItems[preset] = item
         }
-        dictationModelItem.submenu = dictationModelMenu
-        settingsMenu.addItem(dictationModelItem)
-        updateDictationModelState()
-
-        let recoveryRetentionMenu = NSMenu()
-        for choice in RecoveryRetentionPreference.choices {
-            let item = NSMenuItem(title: choice.title, action: #selector(selectRecoveryRetention), keyEquivalent: "")
+        quickVoiceItem.submenu = voices
+        speechMenu.addItem(quickVoiceItem)
+        let languages = NSMenu()
+        for language in TTSLanguage.allCases {
+            let item = NSMenuItem(title: language.displayName, action: #selector(selectTTSLanguage), keyEquivalent: "")
             item.target = self
-            item.representedObject = choice.hours
-            recoveryRetentionMenu.addItem(item)
-            recoveryRetentionItems[choice.hours] = item
+            item.representedObject = language.rawValue
+            languages.addItem(item)
+            ttsLanguageItems[language] = item
         }
-        recoveryRetentionItem.submenu = recoveryRetentionMenu
-        settingsMenu.addItem(recoveryRetentionItem)
+        ttsLanguageItem.submenu = languages
+        speechMenu.addItem(ttsLanguageItem)
+        let once = NSMenuItem(title: "Einmalig vorlesen mit", action: nil, keyEquivalent: "")
+        let providers = NSMenu()
+        for (provider, action) in [(TTSProvider.supertonic, #selector(speakClipboardWithSupertonic)),
+                                   (.phonon, #selector(speakClipboardWithPhonon)),
+                                   (.inworld, #selector(speakClipboardWithInworld)),
+                                   (.xai, #selector(speakClipboardWithXAI))] {
+            let item = NSMenuItem(title: provider.displayName, action: action, keyEquivalent: "")
+            item.target = self
+            providers.addItem(item)
+            ttsActionItems[provider] = item
+        }
+        once.submenu = providers
+        speechMenu.addItem(once)
+        let setup = NSMenuItem(title: "Stimmen & API-Schlüssel …", action: #selector(openTTSSetup), keyEquivalent: "")
+        setup.target = self
+        speechMenu.addItem(setup)
+        ttsStatusItem.isEnabled = false
+        ttsStatusItem.isHidden = true
+        speechMenu.addItem(ttsStatusItem)
+        speechMenu.addItem(.separator())
+        speechMenu.addItem(recentTTSAudioItem)
+        let audioFolder = NSMenuItem(title: "Audioordner öffnen", action: #selector(openTTSAudioFolder), keyEquivalent: "")
+        audioFolder.target = self
+        speechMenu.addItem(audioFolder)
+        speech.submenu = speechMenu
+        menu.addItem(speech)
+
+        let transcripts = NSMenuItem(title: "Transkripte", action: nil, keyEquivalent: "")
+        transcripts.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+        let transcriptsMenu = NSMenu()
+        for item in [recentDictationsItem, recentContinuousItem, recentManualItem] { transcriptsMenu.addItem(item) }
+        transcripts.submenu = transcriptsMenu
+        menu.addItem(transcripts)
+
+        let general = NSMenuItem(title: "Allgemein", action: nil, keyEquivalent: "")
+        general.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        let generalMenu = NSMenu()
         soundEffectsItem.target = self
         soundEffectsItem.state = UserDefaults.standard.bool(forKey: soundEffectsDefaultsKey) ? .on : .off
-        settingsMenu.addItem(soundEffectsItem)
-
-        let diagnosticsItem = NSMenuItem(title: "Diagnostics", action: nil, keyEquivalent: "")
-        let diagnosticsMenu = NSMenu()
-        let openLogFolder = NSMenuItem(title: "Open Log Folder", action: #selector(openLogFolder), keyEquivalent: "")
-        openLogFolder.target = self
-        diagnosticsMenu.addItem(openLogFolder)
-        diagnosticsItem.submenu = diagnosticsMenu
-        settingsMenu.addItem(.separator())
-        settingsMenu.addItem(diagnosticsItem)
-        settingsItem.submenu = settingsMenu
-        menu.addItem(settingsItem)
-
+        generalMenu.addItem(soundEffectsItem)
         startAtLoginItem.target = self
-        menu.addItem(startAtLoginItem)
-        menu.addItem(updater.checkItem)
-        menu.addItem(updater.installItem)
+        generalMenu.addItem(startAtLoginItem)
+        generalMenu.addItem(.separator())
+        generalMenu.addItem(updater.checkItem)
+        generalMenu.addItem(updater.installItem)
         updater.continuousBusy = { [weak self] in
             guard let self else { return true }
             return self.permanentOperationInFlight || self.isPermanentRecording || self.isPermanentProcessing
                 || self.permanentTranscriberStatus.isRunning || self.permanentTranscriberStatus.sourcePending
         }
-
+        let diagnostics = NSMenuItem(title: "Diagnose & Protokolle", action: nil, keyEquivalent: "")
+        let diagnosticsMenu = NSMenu()
+        let logs = NSMenuItem(title: "Protokollordner öffnen", action: #selector(openLogFolder), keyEquivalent: "")
+        logs.target = self
+        diagnosticsMenu.addItem(logs)
+        diagnostics.submenu = diagnosticsMenu
+        generalMenu.addItem(diagnostics)
+        let data = NSMenuItem(title: "Datenordner öffnen", action: #selector(openDataFolder), keyEquivalent: "")
+        data.target = self
+        generalMenu.addItem(data)
+        general.submenu = generalMenu
+        menu.addItem(general)
         menu.addItem(.separator())
-
-        let quit = NSMenuItem(title: "Quit Mac Dictation Agent", action: #selector(quitAgent), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Beenden", action: #selector(quitAgent), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
-
         statusItem.menu = menu
+
+        updateQuickVoice()
+        updateDictationModelState()
         updateStartAtLoginState()
         updateRecoveryRetentionState()
         updateTTSLanguageState()
@@ -3139,7 +3106,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         for (model, item) in dictationModelItems {
             item.state = model == current ? .on : .off
         }
-        dictationModelItem.title = "Transcription Model — \(current.displayName)"
+        dictationModelItem.title = "Modell — \(current.displayName)"
     }
 
     @objc private func selectRecoveryRetention(_ sender: NSMenuItem) {
@@ -3188,7 +3155,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func updateQuickVoice() {
         let current = QuickTTSPreset.current()
-        quickTTSItem.title = current.map { "Quick Speak — \($0.displayName)" } ?? "Quick Speak Clipboard…"
+        quickTTSItem.title = "Zwischenablage vorlesen"
+        quickTTSItem.toolTip = current?.displayName ?? "Zuerst eine Stimme auswählen"
+        quickVoiceItem.title = current.map { "Stimme — \($0.displayName)" } ?? "Stimme auswählen …"
         for (preset, item) in quickVoiceItems {
             item.state = preset == current ? .on : .off
         }
@@ -3198,7 +3167,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         guard let preset = QuickTTSPreset.current() else {
             let alert = NSAlert()
             alert.messageText = "Choose a Quick Voice first"
-            alert.informativeText = "Select a voice under Speak Clipboard → Quick Voice. Cloud voices send clipboard text to the selected provider only when you start speaking."
+            alert.informativeText = "Select a voice under Text to Speech → Stimme. Cloud voices send clipboard text to the selected provider only when you start speaking."
             alert.runModal()
             return
         }
@@ -3208,7 +3177,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func openTTSSetup() {
         let alert = NSAlert()
         alert.messageText = "Set up text-to-speech"
-        alert.informativeText = "Local speech: install uv and ffmpeg, then run Install Optional Tools.command from the download. Supertonic downloads its model on first use. Phonon 40M downloads gated models: accept the terms for gradium/phonon-40m-de and gradium/phonon-40m-en on Hugging Face, then run `hf auth login` or add HF_TOKEN to the key file.\n\nCloud speech: add INWORLD_API_KEY or XAI_API_KEY to the dedicated key file. Cloud voices send your clipboard text to that provider.\n\nChoose a Quick Voice from the Speak Clipboard menu. No provider is selected automatically."
+        alert.informativeText = "Local speech: install uv and ffmpeg, then run Install Optional Tools.command from the download. Supertonic downloads its model on first use. Phonon 40M downloads gated models: accept the terms for gradium/phonon-40m-de and gradium/phonon-40m-en on Hugging Face, then run `hf auth login` or add HF_TOKEN to the key file.\n\nCloud speech: add INWORLD_API_KEY or XAI_API_KEY to the dedicated key file. Cloud voices send your clipboard text to that provider.\n\nChoose a voice under Text to Speech → Stimme. No provider is selected automatically."
         alert.addButton(withTitle: "Done")
         alert.addButton(withTitle: "Edit API Keys")
         alert.addButton(withTitle: "Setup Guide")
@@ -3433,14 +3402,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             item.state = choiceHours == hours ? .on : .off
         }
         if let choice = RecoveryRetentionPreference.choices.first(where: { $0.hours == hours }) {
-            recoveryRetentionItem.title = "Recovery Audio Retention — \(choice.title)"
+            recoveryRetentionItem.title = "Audio aufbewahren — \(choice.title)"
         } else {
-            recoveryRetentionItem.title = "Recovery Audio Retention — \(hours) Hours"
+            recoveryRetentionItem.title = "Audio aufbewahren — \(hours) Stunden"
         }
     }
 
     private func updateTTSLanguageState() {
         let currentLanguage = TTSLanguage.current()
+        ttsLanguageItem.title = "Sprache — \(currentLanguage.displayName)"
         for (language, item) in ttsLanguageItems {
             item.state = language == currentLanguage ? .on : .off
         }
@@ -3498,51 +3468,53 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         isPermanentProcessing = permanentStopRequested || status.isTranscribingSaved
         permanentTranscriberControlItem.isEnabled = !permanentOperationInFlight
         permanentTranscriberControlItem.title = permanentStopRequested
-            ? "Stopping Continuous Recording…"
-            : (status.captureRunning ? "Stop Continuous Recording" : "Start Continuous Recording")
+            ? "Aufnahme wird beendet …"
+            : (status.captureRunning ? "Aufnahme stoppen" : "Aufnahme starten")
         let workerStatus: String
         if status.quickRunning && status.relaxedRunning {
-            workerStatus = "quick + canonical"
+            workerStatus = "Live + Qualität"
         } else if status.relaxedRunning {
-            workerStatus = "canonical"
+            workerStatus = "Qualität"
         } else if status.quickRunning {
-            workerStatus = "quick only"
+            workerStatus = "Live"
         } else {
-            workerStatus = "no worker"
+            workerStatus = "wartet auf Verarbeitung"
         }
         if permanentStopRequested {
-            permanentTranscriberStatusItem.title = status.captureRunning ? "Status: Stop requested" : "Status: Processing"
+            permanentTranscriberStatusItem.title = status.captureRunning ? "Stop angefordert" : "Aufnahme wird verarbeitet"
             permanentTranscriberStatusItem.toolTip = nil
         } else if status.isTranscribingSaved {
             permanentTranscriberStatusItem.title = status.captureError == nil
-                ? "Status: Transcribing saved audio" : "Status: Recording failed - transcribing saved audio"
+                ? "Gespeichertes Audio wird transkribiert" : "Aufnahmefehler — gespeichertes Audio wird transkribiert"
             permanentTranscriberStatusItem.toolTip = status.captureError
         } else if status.captureRunning && status.captureHealthy {
             permanentTranscriberStatusItem.title = status.captureError == nil
-                ? "Status: Recording - \(workerStatus)" : "Status: Recording - transcription error"
+                ? "Aufnahme läuft · \(workerStatus)" : "Aufnahme läuft · Transkriptionsfehler"
             permanentTranscriberStatusItem.toolTip = status.captureError
         } else if status.captureRunning {
-            permanentTranscriberStatusItem.title = "Status: Starting"
+            permanentTranscriberStatusItem.title = "Aufnahme startet"
             permanentTranscriberStatusItem.toolTip = nil
         } else if let error = status.captureError, !error.isEmpty {
-            permanentTranscriberStatusItem.title = "Status: Error"
+            permanentTranscriberStatusItem.title = "Aufnahmefehler"
             permanentTranscriberStatusItem.toolTip = error
         } else if status.sourcePending {
-            permanentTranscriberStatusItem.title = "Status: Transcription pending - start to resume"
+            permanentTranscriberStatusItem.title = "Transkription ausstehend — zum Fortsetzen starten"
             permanentTranscriberStatusItem.toolTip = nil
         } else {
-            permanentTranscriberStatusItem.title = "Status: Stopped"
+            permanentTranscriberStatusItem.title = "Keine Aufnahme"
             permanentTranscriberStatusItem.toolTip = nil
         }
+        let statusColor: NSColor = status.captureError != nil ? .systemOrange
+            : status.captureRunning ? .systemRed : status.isTranscribingSaved || permanentStopRequested ? .systemBlue : .secondaryLabelColor
+        continuousStatusView.update(permanentTranscriberStatusItem.title,
+                                    tint: statusColor, detail: permanentTranscriberStatusItem.toolTip)
         updatePermanentSystemAudioState(status)
         updateStatusIcon()
     }
 
     private func configureRecentMenus() {
         for (item, collection) in [(recentDictationsItem, TranscriptCollection.dictations),
-                                   (recentPermanentRelaxedItem, .canonical),
-                                   (recentPermanentQuickItem, .quick),
-                                   (recentParticipantsItem, .sources), (recentManualItem, .manual)] {
+                                   (recentContinuousItem, .continuous), (recentManualItem, .manual)] {
             let menu = TranscriptPageMenu(collection: collection)
             menu.delegate = self
             item.submenu = menu
@@ -3550,8 +3522,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     private func refreshRecentMenus() {
-        for item in [recentDictationsItem, recentPermanentRelaxedItem, recentPermanentQuickItem,
-                     recentParticipantsItem, recentManualItem] {
+        for item in [recentDictationsItem, recentContinuousItem, recentManualItem] {
             if let menu = item.submenu as? TranscriptPageMenu { refreshTranscriptPage(menu) }
         }
         guard !recentAudioRefreshInFlight else { return }
@@ -3657,6 +3628,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             menu.addItem(item)
         }
         microphoneItem.submenu = menu
+        microphoneItem.title = "Mikrofon — \(selectedMicrophoneName)"
         updateHeaderStatus()
     }
 
@@ -3692,6 +3664,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             menu.addItem(item)
         }
         permanentTranscriberDeviceItem.submenu = menu
+        if let selected = devices.first(where: { $0.isPreferred }) {
+            permanentTranscriberDeviceItem.title = "Mikrofon — \(selected.name)"
+        }
     }
 
     private func updateStatusIcon() {
@@ -3716,7 +3691,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         } else {
             state = "Ready"
         }
-        appStatusItem.title = "\(state) - \(selectedMicrophoneName)"
+        let label: String
+        let tint: NSColor
+        switch state {
+        case "Recording": label = "Aufnahme läuft"; tint = .systemRed
+        case "Transcribing": label = "Transkription läuft"; tint = .systemBlue
+        case "Generating speech": label = "Sprachausgabe wird erzeugt"; tint = .systemBlue
+        default: label = "Bereit zum Diktieren"; tint = .systemGreen
+        }
+        headerStatusView.update(label, tint: tint, detail: selectedMicrophoneName)
     }
 
     private func setStatusImage(color: NSColor?) {

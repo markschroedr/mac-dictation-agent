@@ -9,20 +9,22 @@ struct TranscriptRecord: Sendable {
 }
 
 enum TranscriptCollection: Sendable {
-    case dictations, canonical, quick, sources, manual
+    case dictations, continuous, manual
 
     var locations: [(URL, TranscriptLayout)] {
         switch self {
         case .dictations: return [(dictationRecoveryDir, .sessions), (dictationTranscriptsDir, .flat)]
-        case .canonical: return [(permanentTranscriberTranscriptRoot.appendingPathComponent("relaxed"), .dated)]
-        case .quick: return [(permanentTranscriberTranscriptRoot.appendingPathComponent("quick"), .dated)]
-        case .sources: return [(permanentTranscriberTranscriptRoot.appendingPathComponent("participants"), .flat)]
+        case .continuous: return [
+            (permanentTranscriberTranscriptRoot.appendingPathComponent("relaxed"), .dated),
+            (permanentTranscriberTranscriptRoot.appendingPathComponent("quick"), .dated),
+            (permanentTranscriberTranscriptRoot.appendingPathComponent("participants"), .sessionsByID),
+        ]
         case .manual: return [(manualTranscriptsDir, .flat)]
         }
     }
 }
 
-enum TranscriptLayout { case sessions, flat, dated }
+enum TranscriptLayout { case sessions, flat, dated, sessionsByID }
 
 @MainActor
 final class TranscriptPageMenu: NSMenu {
@@ -87,8 +89,22 @@ private struct TranscriptFiles: IteratorProtocol {
                 continue
             }
             guard ["md", "txt"].contains(entry.pathExtension.lowercased()) else { continue }
-            return TranscriptFile(url: entry, source: entry,
-                                  key: String(entry.path.dropFirst(root.path.count + 1)))
+            let relative = String(entry.path.dropFirst(root.path.count + 1))
+            let key: String
+            switch layout {
+            case .dated:
+                // Persisted hourly format: YYYY/MM/DD/HH.md. Canonical and quick share one key.
+                let parts = (relative as NSString).deletingPathExtension.split(separator: "/")
+                guard parts.count == 4 else { continue }
+                key = parts.joined() + "0000"
+            case .sessionsByID:
+                // Persisted recording format: YYYYMMDDTHHMMSSZ-<id>.txt. Keep each session distinct.
+                let name = entry.deletingPathExtension().lastPathComponent
+                key = String(name.prefix(8)) + String(name.dropFirst(9).prefix(6)) + "-" + name
+            case .flat, .sessions:
+                key = relative
+            }
+            return TranscriptFile(url: entry, source: entry, key: key)
         }
         return nil
     }
@@ -97,23 +113,26 @@ private struct TranscriptFiles: IteratorProtocol {
 func transcriptPage(collection: TranscriptCollection, before: String?) -> TranscriptPage {
     var iterators = collection.locations.map { TranscriptFiles(root: $0.0, layout: $0.1) }
     var heads = iterators.indices.map { iterators[$0].next() }
-    var files: [TranscriptFile] = []
-    while files.count < 6 {
-        guard let index = heads.indices.filter({ heads[$0] != nil })
-            .max(by: { heads[$0]!.key < heads[$1]!.key }) else { break }
-        let file = heads[index]!
-        heads[index] = iterators[index].next()
-        if let before, file.key >= before { continue }
-        files.append(file)
+    var records: [(String, TranscriptRecord)] = []
+    while records.count < 6 {
+        guard let key = heads.compactMap({ $0?.key }).max() else { break }
+        // Prefer canonical, then quick, for the same legacy hour. Never hide a nonempty quick fallback.
+        let candidates = heads.indices.filter { heads[$0]?.key == key }.map { index -> TranscriptFile in
+            let file = heads[index]!
+            heads[index] = iterators[index].next()
+            return file
+        }
+        if let before, key >= before { continue }
+        for file in candidates {
+            let preview = transcriptPreview(file.url)
+            guard !preview.isEmpty else { continue }
+            let modifiedAt = (try? file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            records.append((key, TranscriptRecord(transcriptURL: file.url, sourceURL: file.source,
+                                                  modifiedAt: modifiedAt, preview: preview)))
+            break
+        }
     }
-    let records = files.prefix(5).compactMap { file -> TranscriptRecord? in
-        let preview = transcriptPreview(file.url)
-        guard !preview.isEmpty else { return nil }
-        let modifiedAt = (try? file.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-        return TranscriptRecord(transcriptURL: file.url, sourceURL: file.source,
-                                modifiedAt: modifiedAt, preview: preview)
-    }
-    return TranscriptPage(records: records, nextBefore: files.count > 5 ? files[4].key : nil)
+    return TranscriptPage(records: records.prefix(5).map { $0.1 }, nextBefore: records.count > 5 ? records[4].0 : nil)
 }
 
 func transcriptPreview(_ url: URL, maxBytes: Int = 4096, maxWords: Int = 14) -> String {
