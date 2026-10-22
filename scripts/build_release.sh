@@ -43,11 +43,13 @@ rsync -a \
   --exclude '.venv' \
   --exclude '__pycache__' \
   --exclude '*.log' \
+  --exclude '.env' --exclude 'tts.env' --exclude '.state' --exclude 'storage' --exclude '.DS_Store' \
   "$SOURCE_ROOT/supertonic_worker/" "$RUNTIME_ROOT/supertonic_worker/"
 rsync -a \
   --exclude '.venv' \
   --exclude '__pycache__' \
   --exclude '*.log' \
+  --exclude '.env' --exclude 'tts.env' --exclude '.state' --exclude 'storage' --exclude '.DS_Store' \
   "$SOURCE_ROOT/phonon_worker/" "$RUNTIME_ROOT/phonon_worker/"
 rsync -a \
   --exclude '.venv' \
@@ -56,6 +58,7 @@ rsync -a \
   --exclude '.ruff_cache' \
   --exclude 'tests' \
   --exclude '*.log' \
+  --exclude '.env' --exclude 'tts.env' --exclude '.state' --exclude 'storage' --exclude '.DS_Store' \
   "$SOURCE_ROOT/vendor/permanent-transcriber/" "$RUNTIME_ROOT/vendor/permanent-transcriber/"
 rsync -a \
   "$SOURCE_ROOT/scripts/install_launch_agent.sh" \

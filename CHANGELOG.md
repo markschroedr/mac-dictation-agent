@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.4.0 - 2026-10-22
+
+### Speech
+
+- Added local Phonon 40M speech in German and English, with default and male voices. Models download separately and require acceptance of their non-commercial Hugging Face terms.
+- Added automatic German/English model selection for local speech while preserving manual language selection.
+- Streamed Phonon and xAI PCM directly into one native player, replacing VLC playback.
+- Added play/pause, stop, 10-second skip controls, a seekable timeline and 60-second replay access.
+- Saved completed app speech as MP3. Stopping playback leaves generation running so the saved recording remains complete.
+- Added a local streaming speech endpoint at `/v1/audio/speech`. Other programs receive PCM or WAV without triggering app playback.
+
+### Menu
+
+- Separated transcription, text-to-speech, transcripts and general settings.
+- Grouped dictation and continuous recording settings under transcription; kept the model shared.
+- Combined recent continuous transcripts into one paged list, preserving existing files and preferring nonempty canonical results over quick results for the same legacy hour.
+- Replaced disabled status rows with readable status indicators and refined the player layout.
+
+### Recognition
+
+- Warmed up the transcription model with real inference so macOS can reload evicted Neural Engine weights before dictation.
+
 ## 0.3.0 - 2026-10-19
 
 ### Updates

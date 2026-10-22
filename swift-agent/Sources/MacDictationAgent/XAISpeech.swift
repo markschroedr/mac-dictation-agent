@@ -1,6 +1,6 @@
 import Foundation
 
-/// Same xAI contract as Daimon: POST /tts, codec pcm, mono s16le at 24 kHz.
+/// xAI streaming contract: POST /tts, codec pcm, mono s16le at 24 kHz.
 /// URLSession's data delegate delivers audio before the response completes.
 final class XAISpeechStream: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let receivePCM: (Data) throws -> Void

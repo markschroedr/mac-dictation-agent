@@ -11,7 +11,7 @@ The following workflows run on the Mac:
 - Batch transcription.
 - Continuous microphone and optional system-audio transcription.
 - Speaker diarization.
-- Supertonic text-to-speech.
+- Supertonic and Phonon text-to-speech.
 
 The app has no analytics or telemetry.
 
@@ -22,8 +22,11 @@ The app can make these network requests:
 1. It downloads a model when you first use a workflow that needs that model.
 2. It sends clipboard text to Inworld when you explicitly select Inworld TTS.
 3. It sends clipboard text to xAI when you explicitly select Grok/xAI TTS.
+4. It checks GitHub for app updates. It downloads and installs a release only after you approve the update.
 
 The app does not send microphone audio or transcripts to Inworld or xAI.
+
+Transcription and Phonon speech APIs listen only on `127.0.0.1`. Other local programs can submit requests; speech API responses do not trigger playback or create speech archives in the app.
 
 ## Dictation recovery
 
@@ -33,7 +36,7 @@ The app writes every interactive dictation directly to a durable session directo
 ~/Library/Application Support/Mac Dictation Agent/recordings/recovery/
 ```
 
-This includes successful, failed, interrupted, quiet, and empty dictations. The default recovery window is 24 hours. Choose another window under **Settings → Recovery Audio Retention**. The available choices are 24 hours, 7 days, 30 days, and forever. A former explicit **Keep Successful Dictation Audio** preference continues to mean forever until you choose a new window.
+This includes successful, failed, interrupted, quiet, and empty dictations. The default recovery window is 24 hours. Choose another window under **Transkription → Audio aufbewahren**. The available choices are 24 hours, 7 days, 30 days, and forever. A former explicit **Keep Successful Dictation Audio** preference continues to mean forever until you choose a new window.
 
 Expiry moves complete session directories to macOS Trash. The app excludes active and processing sessions. It does not migrate or prune files in the former `recordings/retained/` or `recordings/successful/` directories.
 
@@ -45,7 +48,7 @@ Manual file transcripts live in `transcripts/manual-files/`.
 
 Continuous capture stores audio, manifests, and transcripts in `permanent-transcriber/storage/`.
 
-Generated TTS audio lives in `tts-audio/`.
+Completed app TTS requests save MP3 recordings in `tts-audio/`. Stop silences playback but lets generation finish so the saved recording remains complete. A temporary PCM recording on disk supports the player's timeline and replay; the app removes it when it releases that player.
 
 Downloaded models live in `models/`.
 
@@ -59,7 +62,7 @@ All paths are below:
 
 ## Credentials
 
-Optional cloud TTS credentials come from the app process environment or live in:
+Optional cloud TTS credentials and `HF_TOKEN` for gated model downloads come from the app process environment or live in:
 
 ```txt
 ~/Library/Application Support/Mac Dictation Agent/runtime/tts.env

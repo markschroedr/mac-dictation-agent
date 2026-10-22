@@ -75,7 +75,7 @@ MAC_DICTATION_DATA_ROOT="$DATA_ROOT" \
 if grep -R -I -E \
   --exclude='uv.lock' \
   --exclude='Package.resolved' \
-  '/Users/markschroeder|Private Docs|private-mac|tailscale|github-private|id_ed25519' \
+  '/Users/[^/]+/|/home/[^/]+/|Private Docs|private-mac|tailscale|github-private|id_ed25519' \
   "$PACKAGE_ROOT" >/dev/null; then
   echo "release contains a private path or host reference" >&2
   exit 1
@@ -86,7 +86,7 @@ for executable in \
   "$APP_DIR/Contents/Helpers/FluidDictationService" \
   "$APP_DIR/Contents/Helpers/SystemAudioCapture"; do
   if strings "$executable" | grep -E \
-    '/Users/markschroeder|Private Docs|private-mac|tailscale|github-private|id_ed25519' \
+    '/Users/[^/]+/|/home/[^/]+/|Private Docs|private-mac|tailscale|github-private|id_ed25519' \
     >/dev/null; then
     echo "release executable contains a private path or host reference: $executable" >&2
     exit 1
