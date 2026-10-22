@@ -5,7 +5,7 @@
 - **Transkription:** shared model; dictation shortcuts, microphone and recovery retention; continuous recording controls and sources.
 - **Text to Speech:** clipboard speech, voice, language, provider setup and saved audio.
 - **Transkripte:** dictations, one continuous recording list, and transcribed files.
-- **Allgemein:** sound effects, login startup, updates, diagnostics and the data folder.
+- **Allgemein:** sound effects, login startup, updates, diagnostics, the data folder, and model licenses/credits.
 
 Continuous transcript pages combine session transcripts and legacy hourly transcripts without moving files. Legacy canonical and quick outputs for the same hour appear once, preferring a nonempty canonical result. Each page shows 5 entries.
 
@@ -94,23 +94,37 @@ Keep the app running. The command finds common audio formats recursively and sub
 
 ### Text-to-speech
 
-- **Supertonic 3** runs locally in English or German.
-- **Phonon 40M** runs locally in English or German, with the model's default voice and a named male voice. Its models are gated: accept the terms for `gradium/phonon-40m-de` and `gradium/phonon-40m-en` on Hugging Face, then run `hf auth login` or add `HF_TOKEN` to `tts.env`.
+- **Supertonic 3** runs locally in English or German under Open RAIL-M. Its use restrictions apply; disclose machine-generated content when sharing speech.
+- **Phonon 40M** runs locally in English or German, with the model's default voice and a named male voice. **Non-commercial use only**, including through the local API. See model access below.
 - **Auto** language picks German or English from the text for local voices.
 - **Inworld** and **Grok/xAI** send clipboard text to the selected provider when you start a request.
 
-Put cloud credentials in the installed private file:
+#### Phonon model access
+
+1. Accept the terms for **both** [Phonon 40M DE](https://huggingface.co/gradium/phonon-40m-de) and [Phonon 40M EN](https://huggingface.co/gradium/phonon-40m-en) with your Hugging Face account. Approval is automatic.
+2. On each Mac, add a read-access `HF_TOKEN` to the private key file below, or authenticate in Terminal with `uvx --from huggingface_hub hf auth login`.
+3. Start Phonon speech. The worker automatically downloads the matching model's weights, config, tokenizer and default voice, plus Henrik/Miles when selected. No manual GGUF download or upload is required.
+4. Keep the cached models for later use. App updates preserve local caches but do not transfer weights or Hugging Face credentials between Macs.
+
+Both configured 40M models require access. The public Apache-licensed `phonon-31m-en` is a different model, not this app's configured English model. The catalog voices have a separate Apache-2.0 license; that does not remove the 40M model's non-commercial restriction. See [credits and license links](../THIRD_PARTY_NOTICES.md).
+
+#### Credentials
+
+Put optional cloud credentials or the Hugging Face token in the installed private file:
 
 ```text
 ~/Library/Application Support/Mac Dictation Agent/runtime/tts.env
 ```
 
 ```bash
+HF_TOKEN=...
 INWORLD_API_KEY=...
 XAI_API_KEY=...
 ```
 
 The app also reads these keys from its process environment. The installer preserves `tts.env` during updates.
+
+#### Playback and recordings
 
 All voices use one native player at the top of the menu: **Play/Pause**, **Stop**, **±10 seconds**, and a seekable timeline.
 Phonon and xAI stream PCM directly. Supertonic and Inworld play decoded chunks in text order.

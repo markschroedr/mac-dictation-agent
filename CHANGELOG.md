@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.2 - 2026-10-22
+
+### Licenses and model access
+
+- Included upstream notices for FluidAudio's bundled third-party components and the complete Supertonic 3 Open RAIL-M license.
+- Added model credits, license links, use restrictions and an in-menu entry to open them.
+- Clarified Phonon 40M's non-commercial model license versus its permissive runtime and catalog voices.
+- Documented automatic model downloads, separate DE/EN Hugging Face approvals and per-Mac authentication; model weights remain outside releases.
+
 ## 0.4.1 - 2026-10-22
 
 ### Security

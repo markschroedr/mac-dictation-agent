@@ -3013,6 +3013,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         let data = NSMenuItem(title: "Datenordner öffnen", action: #selector(openDataFolder), keyEquivalent: "")
         data.target = self
         generalMenu.addItem(data)
+        let licenses = NSMenuItem(title: "Modelllizenzen & Credits …", action: #selector(openThirdPartyNotices), keyEquivalent: "")
+        licenses.target = self
+        generalMenu.addItem(licenses)
         general.submenu = generalMenu
         menu.addItem(general)
         menu.addItem(.separator())
@@ -3174,10 +3177,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         startTTS(provider: preset.provider, voiceID: preset.voiceID)
     }
 
+    @objc private func openThirdPartyNotices() {
+        NSWorkspace.shared.open(agentRoot.appendingPathComponent("THIRD_PARTY_NOTICES.md"))
+    }
+
     @objc private func openTTSSetup() {
         let alert = NSAlert()
         alert.messageText = "Set up text-to-speech"
-        alert.informativeText = "Local speech: install uv and ffmpeg, then run Install Optional Tools.command from the download. Supertonic downloads its model on first use. Phonon 40M downloads gated models: accept the terms for gradium/phonon-40m-de and gradium/phonon-40m-en on Hugging Face, then run `hf auth login` or add HF_TOKEN to the key file.\n\nCloud speech: add INWORLD_API_KEY or XAI_API_KEY to the dedicated key file. Cloud voices send your clipboard text to that provider.\n\nChoose a voice under Text to Speech → Stimme. No provider is selected automatically."
+        alert.informativeText = "Local speech: install uv and ffmpeg, then run Install Optional Tools.command from the download. Supertonic downloads its Open RAIL-M model on first use. Phonon 40M is non-commercial only and downloads gated models: accept the terms for gradium/phonon-40m-de and gradium/phonon-40m-en on Hugging Face, then run `hf auth login` or add HF_TOKEN to the key file on this Mac. No manual model download is needed. Model terms and credits: Allgemein → Modelllizenzen & Credits.\n\nCloud speech: add INWORLD_API_KEY or XAI_API_KEY to the dedicated key file. Cloud voices send your clipboard text to that provider.\n\nChoose a voice under Text to Speech → Stimme. No provider is selected automatically."
         alert.addButton(withTitle: "Done")
         alert.addButton(withTitle: "Edit API Keys")
         alert.addButton(withTitle: "Setup Guide")
@@ -3186,7 +3193,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             do {
                 try FileManager.default.createDirectory(at: ttsEnvFile.deletingLastPathComponent(), withIntermediateDirectories: true)
                 if !FileManager.default.fileExists(atPath: ttsEnvFile.path) {
-                    let template = "# Optional cloud speech credentials. Keep this file private.\n# INWORLD_API_KEY=\n# XAI_API_KEY=\n"
+                    let template = "# Optional speech credentials. Keep this file private.\n# HF_TOKEN=\n# INWORLD_API_KEY=\n# XAI_API_KEY=\n"
                     guard FileManager.default.createFile(atPath: ttsEnvFile.path, contents: Data(template.utf8), attributes: [.posixPermissions: 0o600]) else {
                         throw CocoaError(.fileWriteUnknown)
                     }

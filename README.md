@@ -50,4 +50,4 @@ A local transcription API on loopback serves the same model to your own scripts.
 
 ## License
 
-[MIT](LICENSE). See [model and dependency licenses](THIRD_PARTY_NOTICES.md).
+The app's code is [MIT](LICENSE). Model weights download separately under their own licenses. **Phonon 40M is non-commercial only** and requires a Hugging Face account with model access. See [model credits, restrictions and dependency licenses](THIRD_PARTY_NOTICES.md).
