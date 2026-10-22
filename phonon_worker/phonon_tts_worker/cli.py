@@ -15,7 +15,7 @@ MODELS = {
     "german": ("hf://gradium/phonon-40m-de", "de"),
     "english": ("hf://gradium/phonon-40m-en", "en"),
 }
-# Each checkpoint's own voice is female; male voices come from gradium/phonon-voices.
+# Named voices from gradium/phonon-voices; `None` uses the checkpoint's own voice.
 MALE_VOICES = {"german": "Henrik", "english": "Miles"}
 SUPPORTED_VOICES = {None, "default", "male"}
 

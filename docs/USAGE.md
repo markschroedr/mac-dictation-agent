@@ -86,7 +86,7 @@ Keep the app running. The command finds common audio formats recursively and sub
 ### Text-to-speech
 
 - **Supertonic 3** runs locally in English or German.
-- **Phonon 40M** runs locally in English or German, with a default (female) and a male voice. Its models are gated: accept the terms for `gradium/phonon-40m-de` and `gradium/phonon-40m-en` on Hugging Face, then run `hf auth login` or add `HF_TOKEN` to `tts.env`.
+- **Phonon 40M** runs locally in English or German, with the model's default voice and a named male voice. Its models are gated: accept the terms for `gradium/phonon-40m-de` and `gradium/phonon-40m-en` on Hugging Face, then run `hf auth login` or add `HF_TOKEN` to `tts.env`.
 - **Auto** language picks German or English from the text for local voices.
 - **Inworld** and **Grok/xAI** send clipboard text to the selected provider when you start a request.
 
