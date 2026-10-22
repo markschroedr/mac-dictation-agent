@@ -1067,148 +1067,92 @@ final class ClipboardTTSManager {
     }
 
     func generateSpeech(
-        text: String,
-        provider: TTSProvider,
-        language: TTSLanguage,
-        voiceID: String? = nil,
-        play: Bool,
-        progress: (@Sendable (_ completed: Int, _ total: Int) -> Void)? = nil
+        text: String, provider: TTSProvider, language: TTSLanguage,
+        voiceID: String? = nil, play: Bool,
+        progress: (@Sendable (Int, Int) -> Void)? = nil
     ) throws -> TTSRunResult {
         lock.lock()
-        if isRunning {
-            lock.unlock()
-            throw ClipboardTTSError.alreadyRunning
-        }
+        if isRunning { lock.unlock(); throw ClipboardTTSError.alreadyRunning }
         isRunning = true
         lock.unlock()
-        defer {
-            lock.lock()
-            isRunning = false
-            lock.unlock()
-        }
+        defer { lock.lock(); isRunning = false; lock.unlock() }
 
         let sourceText = normalizedInput(text)
-        guard !sourceText.isEmpty else {
-            throw ClipboardTTSError.emptyClipboard
+        guard !sourceText.isEmpty else { throw ClipboardTTSError.emptyClipboard }
+        guard FileManager.default.isExecutableFile(atPath: ffmpegExecutablePath()) else {
+            throw ClipboardTTSError.requestFailed("Install ffmpeg to save speech MP3 recordings")
         }
-        let effectiveLanguage = language.resolved(
-            for: sourceText,
-            germanOrEnglishOnly: provider.isLocal
-        )
+        let effectiveLanguage = language.resolved(for: sourceText, germanOrEnglishOnly: provider.isLocal)
         guard !provider.isLocal || effectiveLanguage != .auto else {
-            throw ClipboardTTSError.invalidResponse(
-                "\(provider.displayName) could not resolve the text as English or German"
-            )
+            throw ClipboardTTSError.invalidResponse("Could not detect German or English")
         }
         let apiKey: String?
-        if let secretName = provider.secretName {
-            guard let resolved = SecretResolver.value(for: secretName) else {
-                throw ClipboardTTSError.missingSecret(secretName)
-            }
-            apiKey = resolved
-        } else {
-            apiKey = nil
-        }
+        if let secret = provider.secretName {
+            guard let key = SecretResolver.value(for: secret) else { throw ClipboardTTSError.missingSecret(secret) }
+            apiKey = key
+        } else { apiKey = nil }
 
-        try FileManager.default.createDirectory(at: ttsAudioDir, withIntermediateDirectories: true)
-        let stamp = Self.timestamp()
-        let languageLabel = language == effectiveLanguage ? language.rawValue : "\(language.rawValue)-\(effectiveLanguage.rawValue)"
-        let runDir = ttsAudioDir.appendingPathComponent("\(stamp)-\(provider.rawValue)-\(languageLabel)-\(UUID().uuidString)")
+        let runDir = ttsAudioDir.appendingPathComponent(
+            "\(Self.timestamp())-\(provider.rawValue)-\(effectiveLanguage.rawValue)-\(UUID().uuidString)"
+        )
         try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
-
         let metrics = TTSRunMetrics(provider: provider)
-        if provider == .phonon {
-            return try generatePhonon(
-                text: sourceText, language: effectiveLanguage, voiceID: voiceID, play: play,
-                runDir: runDir, metrics: metrics, progress: progress
-            )
-        }
-        let chunks = ProgressiveTTSChunker.chunks(
-            text: sourceText,
-            maximumCharacters: provider.maxChunkCharacters
-        )
-        let playback = play
-            ? SpeechPlayback(metrics: metrics)
-            : nil
+        let playback = try SpeechPlayback(metrics: metrics, title: provider.displayName,
+                                          archiveURL: runDir.appendingPathComponent("audio.mp3"), autoplay: play)
         lock.lock()
-        let previousPlayback = latestPlayback
+        let previous = latestPlayback
         latestPlayback = playback
         lock.unlock()
-        previousPlayback?.abort()
-        logEvent(
-            "tts start provider=\(provider.rawValue) selected_language=\(language.rawValue) "
-                + "effective_language=\(effectiveLanguage.rawValue) chars=\(sourceText.count) "
-                + "chunks=\(chunks.count) chunk_words=\(chunks.map { $0.split(whereSeparator: \Character.isWhitespace).count })"
-        )
+        previous?.abort()
+
+        let chunks: [String]
+        if provider == .phonon || (provider == .xai && sourceText.count <= provider.maxChunkCharacters) {
+            chunks = [sourceText]
+        } else {
+            chunks = ProgressiveTTSChunker.chunks(text: sourceText, maximumCharacters: provider.maxChunkCharacters)
+        }
         progress?(0, chunks.count)
-
+        let receive: (Data) throws -> Void = { pcm in
+            metrics.markFirstAudioReady()
+            try playback.append(pcm)
+        }
         let onChunkReady: @Sendable (Int, URL) throws -> Void = { index, url in
-            if index == 1 {
-                metrics.markFirstAudioReady()
-            }
-            playback?.accept(index: index, url: url)
+            if index == 1 { metrics.markFirstAudioReady() }
+            playback.accept(index: index, url: url)
         }
-
-        let chunkFiles: [URL]
         do {
-            if provider.isLocal {
-                chunkFiles = try synthesizeLocalChunks(
-                    chunks,
-                    provider: provider,
-                    language: effectiveLanguage,
-                    voiceID: voiceID,
-                    runDir: runDir,
-                    progress: progress,
-                    onChunkReady: onChunkReady
+            switch provider {
+            case .phonon:
+                try PhononSpeech.shared.stream(text: sourceText, language: effectiveLanguage, voice: voiceID,
+                                               cancelled: { playback.cancelled }, receive: receive)
+                progress?(1, 1)
+            case .xai:
+                guard let apiKey else { throw ClipboardTTSError.missingSecret("XAI_API_KEY") }
+                let voice = voiceID ?? configuredVoiceID(
+                    keys: ["MAC_DICTATION_XAI_\(effectiveLanguage.rawValue.uppercased())_VOICE_ID", "MAC_DICTATION_XAI_VOICE_ID"],
+                    defaultVoiceID: effectiveLanguage.defaultXAIVoiceID
                 )
-            } else {
-                guard let apiKey else {
-                    throw ClipboardTTSError.invalidResponse(
-                        "\(provider.displayName) API key was not resolved"
-                    )
+                for (index, chunk) in chunks.enumerated() {
+                    try XAISpeechStream.synthesize(text: chunk, voice: voice, language: effectiveLanguage.xaiCode,
+                                                   apiKey: apiKey, receive: receive)
+                    progress?(index + 1, chunks.count)
                 }
-                chunkFiles = try synthesizeRemoteChunks(
-                    chunks,
-                    provider: provider,
-                    language: effectiveLanguage,
-                    voiceID: voiceID,
-                    apiKey: apiKey,
-                    runDir: runDir,
-                    progress: progress,
-                    onChunkReady: onChunkReady
-                )
+            case .supertonic:
+                _ = try synthesizeLocalChunks(chunks, provider: provider, language: effectiveLanguage, voiceID: voiceID,
+                                              runDir: runDir, progress: progress, onChunkReady: onChunkReady)
+            case .inworld:
+                guard let apiKey else { throw ClipboardTTSError.missingSecret("INWORLD_API_KEY") }
+                _ = try synthesizeRemoteChunks(chunks, provider: provider, language: effectiveLanguage, voiceID: voiceID,
+                                               apiKey: apiKey, runDir: runDir, progress: progress, onChunkReady: onChunkReady)
             }
+            let output = try playback.finish()
+            metrics.markGenerationCompleted()
+            return TTSRunResult(openURL: output, runDir: runDir, chunkCount: chunks.count,
+                                characterCount: sourceText.count, metrics: metrics)
         } catch {
-            playback?.abort(error: "TTS generation failed: \(error)")
+            playback.abort(error: String(describing: error))
             throw error
         }
-
-        let openURL = runDir.appendingPathComponent(
-            "audio.\(chunks.count > 1 && !provider.isLocal ? "m4a" : provider.audioExtension)"
-        )
-        do {
-            try JoinedTTSWriter.write(
-                chunks: chunkFiles,
-                provider: provider,
-                to: openURL
-            )
-        } catch {
-            playback?.abort(error: "Could not join TTS audio: \(error)")
-            throw error
-        }
-        playback?.finish()
-        metrics.markGenerationCompleted()
-        lock.lock()
-        latestPlayback = playback
-        lock.unlock()
-
-        return TTSRunResult(
-            openURL: openURL,
-            runDir: runDir,
-            chunkCount: chunks.count,
-            characterCount: sourceText.count,
-            metrics: metrics
-        )
     }
 
     private func synthesizeLocalChunks(
@@ -1333,47 +1277,25 @@ final class ClipboardTTSManager {
         )
     }
 
-    private func generatePhonon(
-        text: String, language: TTSLanguage, voiceID: String?, play: Bool,
-        runDir: URL, metrics: TTSRunMetrics,
-        progress: (@Sendable (Int, Int) -> Void)?
-    ) throws -> TTSRunResult {
-        let playback = play ? SpeechPlayback(metrics: metrics) : nil
+    var playbackSnapshot: SpeechPlaybackSnapshot? {
         lock.lock()
-        let previous = latestPlayback
-        latestPlayback = playback
+        let playback = latestPlayback
         lock.unlock()
-        previous?.stop()
-        let outputURL = runDir.appendingPathComponent("audio.wav")
-        var completed = false
-        defer {
-            if !completed {
-                playback?.stop()
-                try? FileManager.default.removeItem(at: outputURL)
-            }
-        }
-        let output = try AVAudioFile(
-            forWriting: outputURL,
-            settings: [
-                AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 24_000,
-                AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false
-            ]
-        )
-        progress?(0, 1)
-        try PhononSpeech.shared.stream(text: text, language: language, voice: voiceID,
-                                       cancelled: { playback?.state == "stopped" }) { pcm in
-            metrics.markFirstAudioReady()
-            let buffer = try SpeechPCM.buffer(pcm)
-            try output.write(from: buffer)
-            try playback?.append(buffer)
-        }
-        playback?.finish()
-        metrics.markGenerationCompleted()
-        completed = true
-        progress?(1, 1)
-        return TTSRunResult(openURL: outputURL, runDir: runDir, chunkCount: 1,
-                            characterCount: text.count, metrics: metrics)
+        return playback?.snapshot
+    }
+
+    func seekSpeech(to seconds: Double) {
+        lock.lock()
+        let playback = latestPlayback
+        lock.unlock()
+        playback?.seek(to: seconds)
+    }
+
+    func skipSpeech(by seconds: Double) {
+        lock.lock()
+        let playback = latestPlayback
+        lock.unlock()
+        playback?.skip(by: seconds)
     }
 
     var playbackState: String {
@@ -1436,14 +1358,10 @@ final class ClipboardTTSManager {
         apiKey: String
     ) throws -> Data {
         switch provider {
-        case .supertonic, .phonon:
-            throw ClipboardTTSError.invalidResponse(
-                "\(provider.displayName) must use the local service"
-            )
+        case .supertonic, .phonon, .xai:
+            throw ClipboardTTSError.invalidResponse("\(provider.displayName) does not use the file-based cloud path")
         case .inworld:
             return try synthesizeInworld(text: text, language: language, voiceOverride: voiceID, apiKey: apiKey)
-        case .xai:
-            return try synthesizeXAI(text: text, language: language, voiceOverride: voiceID, apiKey: apiKey)
         }
     }
 
@@ -1489,35 +1407,6 @@ final class ClipboardTTSManager {
             throw ClipboardTTSError.invalidResponse("Inworld response did not include audioContent")
         }
         return audio
-    }
-
-    private func synthesizeXAI(text: String, language: TTSLanguage, voiceOverride: String?, apiKey: String) throws -> Data {
-        let voiceID = voiceOverride ?? configuredVoiceID(
-            keys: [
-                "MAC_DICTATION_XAI_\(language.rawValue.uppercased())_VOICE_ID",
-                "MAC_DICTATION_XAI_VOICE_ID",
-            ],
-            defaultVoiceID: language.defaultXAIVoiceID
-        )
-        logEvent("tts request provider=xai language=\(language.rawValue) voice=\(voiceID)")
-        let payload: [String: Any] = [
-            "text": text,
-            "voice_id": voiceID,
-            "language": language.xaiCode,
-            "output_format": [
-                "codec": "mp3",
-                "sample_rate": 24000,
-                "bit_rate": 128000,
-            ],
-        ]
-        return try requestJSON(
-            url: URL(string: "https://api.x.ai/v1/tts")!,
-            headers: [
-                "Authorization": "Bearer \(apiKey)",
-                "Content-Type": "application/json",
-            ],
-            payload: payload
-        )
     }
 
     private func configuredVoiceID(keys: [String], defaultVoiceID: String) -> String {
@@ -2887,8 +2776,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let appStatusItem = NSMenuItem(title: "Ready", action: nil, keyEquivalent: "")
     private let quickTTSItem = NSMenuItem(title: "Quick Speak Clipboard…", action: #selector(speakClipboardQuick), keyEquivalent: "")
     private var quickVoiceItems: [QuickTTSPreset: NSMenuItem] = [:]
-    private let pauseSpeechItem = NSMenuItem(title: "Pause Speaking", action: #selector(toggleSpeechPause), keyEquivalent: "")
-    private let stopSpeechItem = NSMenuItem(title: "Stop Speaking", action: #selector(stopSpeaking), keyEquivalent: "")
+    private let speechPlayerItem = NSMenuItem()
+    private let speechPlayerSeparator = NSMenuItem.separator()
+    private var speechPlayerView: SpeechMenuView?
+    private var speechPlayerTimer: Timer?
     private let startAtLoginItem = NSMenuItem(title: "Start at Login", action: #selector(toggleStartAtLogin), keyEquivalent: "")
     private let soundEffectsItem = NSMenuItem(title: "Sound Effects", action: #selector(toggleSoundEffects), keyEquivalent: "")
     private let permanentTranscriberStatusItem = NSMenuItem(title: "Status: Stopped", action: nil, keyEquivalent: "")
@@ -2957,6 +2848,17 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
         let menu = NSMenu()
         menu.delegate = self
+        let playerView = SpeechMenuView(
+            play: { [weak self] in self?.tts.pauseOrResumeSpeech(); self?.refreshSpeechPlayer() },
+            seek: { [weak self] seconds in self?.tts.seekSpeech(to: seconds); self?.refreshSpeechPlayer() },
+            skip: { [weak self] seconds in self?.tts.skipSpeech(by: seconds); self?.refreshSpeechPlayer() },
+            stop: { [weak self] in self?.tts.stopSpeech(); self?.refreshSpeechPlayer() }
+        )
+        speechPlayerView = playerView
+        speechPlayerItem.view = playerView
+        menu.addItem(speechPlayerItem)
+        menu.addItem(speechPlayerSeparator)
+        refreshSpeechPlayer()
         let title = NSMenuItem(title: "Mac Dictation Agent", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
@@ -2970,10 +2872,6 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         quickTTSItem.target = self
         menu.addItem(quickTTSItem)
         updateQuickVoice()
-        pauseSpeechItem.target = self
-        stopSpeechItem.target = self
-        menu.addItem(pauseSpeechItem)
-        menu.addItem(stopSpeechItem)
 
         let transcribeAudioFile = NSMenuItem(title: "Transcribe Audio File...", action: #selector(transcribeAudioFile), keyEquivalent: "")
         transcribeAudioFile.target = self
@@ -3185,6 +3083,12 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         }
         updateQuickVoice()
         updateTTSActionState()
+        speechPlayerTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refreshSpeechPlayer() }
+        }
+        speechPlayerTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
         refreshRecentMenus()
         refreshMicrophoneMenu()
         rebuildPermanentTranscriberDeviceMenu(devices: permanentTranscriberDevices)
@@ -3245,14 +3149,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         logEvent("dictation recovery retention selected hours=\(hours)")
     }
 
-    @objc private func toggleSpeechPause() {
-        tts.pauseOrResumeSpeech()
-        updateTTSActionState()
+    func menuDidClose(_ menu: NSMenu) {
+        guard !(menu is TranscriptPageMenu) else { return }
+        speechPlayerTimer?.invalidate()
+        speechPlayerTimer = nil
     }
 
-    @objc private func stopSpeaking() {
-        tts.stopSpeech()
-        updateTTSActionState()
+    private func refreshSpeechPlayer() {
+        let snapshot = tts.playbackSnapshot
+        let visible = snapshot?.visible == true
+        speechPlayerItem.isHidden = !visible
+        speechPlayerSeparator.isHidden = !visible
+        if let snapshot, visible { speechPlayerView?.refresh(snapshot) }
     }
 
     @objc private func speakClipboardWithSupertonic() {
@@ -3541,10 +3449,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     private func updateTTSActionState() {
-        let state = tts.playbackState
-        pauseSpeechItem.title = state == "paused" ? "Resume Speaking" : "Pause Speaking"
-        pauseSpeechItem.isEnabled = state != "stopped"
-        stopSpeechItem.isEnabled = state != "stopped"
+        refreshSpeechPlayer()
         for item in ttsActionItems.values {
             item.isEnabled = !isTTSProcessing
             item.toolTip = isTTSProcessing ? "Another speech generation is running" : nil

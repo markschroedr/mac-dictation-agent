@@ -103,9 +103,14 @@ XAI_API_KEY=...
 
 The app also reads these keys from its process environment. The installer preserves `tts.env` during updates.
 
-All voices use one native player. **Pause Speaking / Resume Speaking** and **Stop Speaking** live beside Quick Speak.
-Phonon plays incoming PCM immediately. Supertonic and cloud voices play their completed chunks in text order.
-The joined audio file remains in Recent Audio. Stop never resumes playback when later chunks finish.
+All voices use one native player at the top of the menu: **Play/Pause**, **Stop**, **±10 seconds**, and a seekable timeline.
+Phonon and xAI stream PCM directly. Supertonic and Inworld play decoded chunks in text order.
+During generation, the timeline covers the audio already received. Seeking and pausing do not interrupt generation.
+Stop silences playback without resuming when more audio arrives; generation continues to preserve the complete recording.
+Every completed app speech request saves `audio.mp3` from the received PCM for backup and later playback in Recent Audio.
+The player shows **Replay** for 60 seconds after playback ends or stops. Pause keeps the player available.
+MP3 encoding requires ffmpeg; the temporary PCM recording stays on disk only for the player's lifetime.
+API requests below remain audio-only and do not create app recordings.
 
 #### Local streaming speech API
 

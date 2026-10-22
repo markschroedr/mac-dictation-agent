@@ -127,61 +127,6 @@ struct ProgressiveTTSChunker {
     }
 }
 
-enum JoinedTTSWriter {
-    static func write(chunks: [URL], provider: TTSProvider, to outputURL: URL) throws {
-        guard let first = chunks.first else {
-            throw ClipboardTTSError.invalidResponse("TTS produced no audio chunks")
-        }
-        if chunks.count == 1 {
-            try FileManager.default.copyItem(at: first, to: outputURL)
-            return
-        }
-        if provider.isLocal {
-            let input = try AVAudioFile(forReading: first)
-            let output = try AVAudioFile(forWriting: outputURL, settings: input.fileFormat.settings)
-            for url in chunks {
-                let file = try AVAudioFile(forReading: url)
-                guard file.processingFormat == input.processingFormat,
-                      let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 16_384) else {
-                    throw ClipboardTTSError.invalidResponse("TTS chunks used incompatible audio formats")
-                }
-                while file.framePosition < file.length {
-                    try file.read(into: buffer)
-                    try output.write(from: buffer)
-                }
-            }
-            return
-        }
-        // Independent MP3s have their own duration/seek headers. A container export produces
-        // one correctly seekable recording instead of concatenating incompatible file headers.
-        let composition = AVMutableComposition()
-        guard let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-            throw ClipboardTTSError.invalidResponse("Could not create joined audio track")
-        }
-        var position = CMTime.zero
-        for url in chunks {
-            let asset = AVURLAsset(url: url)
-            guard let source = asset.tracks(withMediaType: .audio).first else {
-                throw ClipboardTTSError.invalidResponse("TTS chunk contains no audio track")
-            }
-            let duration = asset.duration
-            try track.insertTimeRange(CMTimeRange(start: .zero, duration: duration), of: source, at: position)
-            position = CMTimeAdd(position, duration)
-        }
-        guard let exporter = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) else {
-            throw ClipboardTTSError.invalidResponse("Could not create joined audio exporter")
-        }
-        exporter.outputURL = outputURL
-        exporter.outputFileType = .m4a
-        let completed = DispatchSemaphore(value: 0)
-        exporter.exportAsynchronously { completed.signal() }
-        completed.wait()
-        guard exporter.status == .completed else {
-            throw exporter.error ?? ClipboardTTSError.invalidResponse("Could not export joined audio")
-        }
-    }
-}
-
 enum TTSStreamPCM {
     static func decode(_ source: URL, to destination: URL) throws {
         let asset = AVURLAsset(url: source)
