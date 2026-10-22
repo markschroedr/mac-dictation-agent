@@ -57,7 +57,7 @@ MAC_DICTATION_INSTALL_EXTRAS="0" \
 APP_DIR="$STAGE/MacDictationAgent.app"
 PLIST="$STAGE/launch.plist"
 
-if [[ -d "$STAGE/vendor/permanent-transcriber/.venv" || -d "$STAGE/supertonic_worker/.venv" ]]; then
+if [[ -d "$STAGE/vendor/permanent-transcriber/.venv" || -d "$STAGE/supertonic_worker/.venv" || -d "$STAGE/phonon_worker/.venv" ]]; then
   echo "core installation created an optional Python environment" >&2
   exit 1
 fi

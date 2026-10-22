@@ -25,6 +25,7 @@ done
 mkdir -p \
   "$PRODUCT_ROOT" \
   "$RUNTIME_ROOT/supertonic_worker" \
+  "$RUNTIME_ROOT/phonon_worker" \
   "$RUNTIME_ROOT/vendor/permanent-transcriber" \
   "$RUNTIME_ROOT/scripts" \
   "$RUNTIME_ROOT/docs" \
@@ -43,6 +44,11 @@ rsync -a \
   --exclude '__pycache__' \
   --exclude '*.log' \
   "$SOURCE_ROOT/supertonic_worker/" "$RUNTIME_ROOT/supertonic_worker/"
+rsync -a \
+  --exclude '.venv' \
+  --exclude '__pycache__' \
+  --exclude '*.log' \
+  "$SOURCE_ROOT/phonon_worker/" "$RUNTIME_ROOT/phonon_worker/"
 rsync -a \
   --exclude '.venv' \
   --exclude '__pycache__' \

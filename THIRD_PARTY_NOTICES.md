@@ -31,6 +31,17 @@ The release archive includes FluidAudio in the native helper binary. Its full Ap
 
 The package and model are not included in this repository. The local TTS helper downloads model assets on first use. The model license contains use restrictions; review it before redistribution or hosted use.
 
+## Phonon 40M
+
+- Python package: `ptts` 0.4.1
+- Package license: MIT OR Apache-2.0
+- Package source: https://github.com/gradium-ai/xn-ptts
+- Models: `gradium/phonon-40m-de`, `gradium/phonon-40m-en`; voices: `gradium/phonon-voices`
+- Model license: CC BY-NC 4.0 (non-commercial)
+- Model source: https://huggingface.co/gradium/phonon-40m-de
+
+The package and models are not included in this repository. The models are gated: accept their terms on Hugging Face and authenticate before first use. The local TTS helper downloads them on first use.
+
 ## Streaming Sortformer 4-speaker v2.1
 
 - MLX conversion: `mlx-community/diar_streaming_sortformer_4spk-v2.1-fp16`
@@ -42,4 +53,4 @@ The package and model are not included in this repository. The local TTS helper 
 
 The model is not included in this repository. It is downloaded when canonical continuous transcription first attempts speaker diarization.
 
-Python and Swift dependencies retain their respective licenses. Lockfiles under `supertonic_worker/`, `swift-agent/`, and `vendor/permanent-transcriber/` record the exact source-release dependency sets.
+Python and Swift dependencies retain their respective licenses. Lockfiles under `supertonic_worker/`, `phonon_worker/`, `swift-agent/`, and `vendor/permanent-transcriber/` record the exact source-release dependency sets.

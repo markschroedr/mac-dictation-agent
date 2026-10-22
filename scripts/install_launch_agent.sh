@@ -16,6 +16,7 @@ if [[ "${1:-}" != "--activate" ]]; then
   MODEL_ROOT="${MAC_DICTATION_MODEL_ROOT:-$DATA_ROOT/models}"
   FLUID_ROOT="${MAC_DICTATION_FLUID_MODEL_ROOT:-$MODEL_ROOT/fluid-audio}"
   TTS_ROOT="${MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT:-$MODEL_ROOT/supertonic-3}"
+  PHONON_ROOT="${MAC_DICTATION_PHONON_TTS_MODEL_ROOT:-$MODEL_ROOT/phonon}"
   EXTRAS="${MAC_DICTATION_INSTALL_EXTRAS:-1}"
   PREBUILT="${MAC_DICTATION_PREBUILT_APP:-}"
   [[ ! -e "$ROOT" && ! -L "$ROOT" ]] || { echo "Preparation requires a new runtime directory: $ROOT" >&2; exit 1; }
@@ -29,7 +30,7 @@ if [[ "${1:-}" != "--activate" ]]; then
   fi
   mkdir -p "$ROOT/vendor"
   # Explicit product allowlist. Never mirror a checkout or delete destination data.
-  for directory in supertonic_worker scripts docs; do
+  for directory in supertonic_worker phonon_worker scripts docs; do
     rsync -a --exclude .venv --exclude __pycache__ --exclude .pytest_cache \
       --exclude '*.log' --exclude .env --exclude tts.env \
       "$SOURCE_ROOT/$directory/" "$ROOT/$directory/"
@@ -46,7 +47,7 @@ if [[ "${1:-}" != "--activate" ]]; then
     fi
   done
   if [[ "$EXTRAS" == 1 ]]; then
-    for project in supertonic_worker vendor/permanent-transcriber; do
+    for project in supertonic_worker phonon_worker vendor/permanent-transcriber; do
       (cd "$ROOT/$project" && uv sync --frozen)
     done
   fi
@@ -84,6 +85,8 @@ if [[ "${1:-}" != "--activate" ]]; then
   add_env MAC_DICTATION_SYSTEM_AUDIO_HELPER "$APP_DIR/Contents/Helpers/SystemAudioCapture"
   add_env MAC_DICTATION_SUPERTONIC_TTS_SERVICE_BIN "$ROOT/supertonic_worker/.venv/bin/supertonic-tts-worker"
   add_env MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT "$TTS_ROOT"
+  add_env MAC_DICTATION_PHONON_TTS_SERVICE_BIN "$ROOT/phonon_worker/.venv/bin/phonon-tts-worker"
+  add_env MAC_DICTATION_PHONON_TTS_MODEL_ROOT "$PHONON_ROOT"
   add_env MAC_DICTATION_TTS_IDLE_SECONDS "${MAC_DICTATION_TTS_IDLE_SECONDS:-300}"
   # A cold Fluid start can recompile the ANE encoder for 20-90 s; keep it resident.
   add_env MAC_DICTATION_FLUID_IDLE_SECONDS "${MAC_DICTATION_FLUID_IDLE_SECONDS:-86400}"

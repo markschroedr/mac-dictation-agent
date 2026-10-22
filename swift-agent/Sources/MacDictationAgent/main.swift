@@ -68,6 +68,21 @@ let supertonicTTSModelRoot = ProcessInfo.processInfo.environment[
     "models/supertonic-3",
     isDirectory: true
 )
+let phononTTSServiceExecutable = ProcessInfo.processInfo.environment[
+    "MAC_DICTATION_PHONON_TTS_SERVICE_BIN"
+].map {
+    URL(fileURLWithPath: $0)
+} ?? agentRoot.appendingPathComponent(
+    "phonon_worker/.venv/bin/phonon-tts-worker"
+)
+let phononTTSModelRoot = ProcessInfo.processInfo.environment[
+    "MAC_DICTATION_PHONON_TTS_MODEL_ROOT"
+].map {
+    URL(fileURLWithPath: $0)
+} ?? applicationSupportRoot.appendingPathComponent(
+    "models/phonon",
+    isDirectory: true
+)
 let permanentTranscriberTranscriptRoot = permanentTranscriberStorageDir.appendingPathComponent("transcripts")
 let permanentTranscriberModeDefaultsKey = "permanentTranscriberMode"
 let chunkSeconds = 20.0
@@ -222,6 +237,7 @@ func runProcessCapturingOutput(
 
 enum TTSProvider: String, Sendable {
     case supertonic
+    case phonon
     case inworld
     case xai
 
@@ -229,6 +245,8 @@ enum TTSProvider: String, Sendable {
         switch self {
         case .supertonic:
             return "Supertonic 3 (local)"
+        case .phonon:
+            return "Phonon 40M (local)"
         case .inworld:
             return "Inworld"
         case .xai:
@@ -238,7 +256,7 @@ enum TTSProvider: String, Sendable {
 
     var secretName: String? {
         switch self {
-        case .supertonic:
+        case .supertonic, .phonon:
             return nil
         case .inworld:
             return "INWORLD_API_KEY"
@@ -249,7 +267,7 @@ enum TTSProvider: String, Sendable {
 
     var maxChunkCharacters: Int {
         switch self {
-        case .supertonic:
+        case .supertonic, .phonon:
             return 5_000
         case .inworld:
             return 1900
@@ -260,7 +278,7 @@ enum TTSProvider: String, Sendable {
 
     var audioExtension: String {
         switch self {
-        case .supertonic:
+        case .supertonic, .phonon:
             return "wav"
         case .inworld, .xai:
             return "mp3"
@@ -268,22 +286,29 @@ enum TTSProvider: String, Sendable {
     }
 
     var isLocal: Bool {
-        self == .supertonic
+        self == .supertonic || self == .phonon
+    }
+
+    var serviceExecutable: URL? {
+        switch self {
+        case .supertonic:
+            return supertonicTTSServiceExecutable
+        case .phonon:
+            return phononTTSServiceExecutable
+        case .inworld, .xai:
+            return nil
+        }
     }
 
     var maxConcurrentRequests: Int {
         switch self {
-        case .supertonic:
+        case .supertonic, .phonon:
             return 1
         case .inworld:
             return 10
         case .xai:
             return 4
         }
-    }
-
-    func supports(_ language: TTSLanguage) -> Bool {
-        language != .auto || self != .supertonic
     }
 }
 
@@ -349,15 +374,18 @@ enum TTSLanguage: String, CaseIterable, Sendable {
         }
     }
 
-    func resolved(for text: String) -> TTSLanguage {
+    /// Local runtimes speak only German and English, so their detection chooses between those two.
+    /// Cloud providers keep `.auto` for other languages and detect it themselves.
+    func resolved(for text: String, germanOrEnglishOnly: Bool) -> TTSLanguage {
         guard self == .auto else {
             return self
         }
-        let sample = String(text.prefix(4000))
-        guard let detected = NLLanguageRecognizer.dominantLanguage(for: sample) else {
-            return .auto
+        let recognizer = NLLanguageRecognizer()
+        if germanOrEnglishOnly {
+            recognizer.languageConstraints = [.german, .english]
         }
-        switch detected {
+        recognizer.processString(String(text.prefix(4000)))
+        switch recognizer.dominantLanguage {
         case .english:
             return .english
         case .german:
@@ -396,11 +424,12 @@ extension DictationModel {
 }
 
 enum QuickTTSPreset: String, CaseIterable {
-    case supertonicM1, inworldConfigured, xaiLeo
+    case supertonicM1, phononDefault, phononMale, inworldConfigured, xaiLeo
 
     var provider: TTSProvider {
         switch self {
         case .supertonicM1: return .supertonic
+        case .phononDefault, .phononMale: return .phonon
         case .inworldConfigured: return .inworld
         case .xaiLeo: return .xai
         }
@@ -409,6 +438,8 @@ enum QuickTTSPreset: String, CaseIterable {
     var voiceID: String? {
         switch self {
         case .supertonicM1: return "M1"
+        case .phononDefault: return nil
+        case .phononMale: return "male"
         case .inworldConfigured: return nil
         case .xaiLeo: return "leo"
         }
@@ -417,6 +448,8 @@ enum QuickTTSPreset: String, CaseIterable {
     var displayName: String {
         switch self {
         case .supertonicM1: return "Supertonic 3 — M1 (local)"
+        case .phononDefault: return "Phonon 40M — Default Voice (local)"
+        case .phononMale: return "Phonon 40M — Male Voice (local)"
         case .inworldConfigured: return "Inworld — Configured Voice (cloud)"
         case .xaiLeo: return "Grok/xAI — Leo (cloud)"
         }
@@ -770,6 +803,10 @@ final class LocalTTSClient {
         var environment = ProcessInfo.processInfo.environment
         environment[configuration.modelRootEnvironmentVariable] =
             configuration.modelRoot.path
+        // Gated Hugging Face models accept a token from the key file as well as `hf auth login`.
+        if let token = SecretResolver.value(for: "HF_TOKEN") {
+            environment["HF_TOKEN"] = token
+        }
         serviceProcess.environment = environment
         try serviceProcess.run()
 
@@ -950,6 +987,16 @@ final class ClipboardTTSManager {
             modelRootEnvironmentVariable: "MAC_DICTATION_SUPERTONIC_TTS_MODEL_ROOT"
         )
     )
+    private let phonon = LocalTTSClient(
+        configuration: LocalTTSClientConfiguration(
+            displayName: "Phonon 40M",
+            logName: "phonon-tts-service",
+            executable: phononTTSServiceExecutable,
+            modelRoot: phononTTSModelRoot,
+            // ptts resolves hf:// models through the Hugging Face cache.
+            modelRootEnvironmentVariable: "HF_HUB_CACHE"
+        )
+    )
 
     func speakClipboard(
         provider: TTSProvider,
@@ -1004,12 +1051,10 @@ final class ClipboardTTSManager {
         guard !sourceText.isEmpty else {
             throw ClipboardTTSError.emptyClipboard
         }
-        guard provider.supports(language) else {
-            throw ClipboardTTSError.invalidResponse(
-                "\(provider.displayName) requires English or German; Auto is not supported"
-            )
-        }
-        let effectiveLanguage = language.resolved(for: sourceText)
+        let effectiveLanguage = language.resolved(
+            for: sourceText,
+            germanOrEnglishOnly: provider.isLocal
+        )
         guard !provider.isLocal || effectiveLanguage != .auto else {
             throw ClipboardTTSError.invalidResponse(
                 "\(provider.displayName) could not resolve the text as English or German"
@@ -1140,7 +1185,8 @@ final class ClipboardTTSManager {
                 index: index,
                 extension: provider.audioExtension
             )
-            let byteCount = try supertonic.synthesize(
+            let client = provider == .phonon ? phonon : supertonic
+            let byteCount = try client.synthesize(
                 text: chunk,
                 language: language,
                 voiceID: voiceID,
@@ -1258,6 +1304,7 @@ final class ClipboardTTSManager {
         lock.unlock()
         playback?.abort(error: "TTS manager shut down")
         supertonic.shutdown()
+        phonon.shutdown()
     }
 
     private func clipboardText() throws -> String {
@@ -1282,7 +1329,7 @@ final class ClipboardTTSManager {
         apiKey: String
     ) throws -> Data {
         switch provider {
-        case .supertonic:
+        case .supertonic, .phonon:
             throw ClipboardTTSError.invalidResponse(
                 "\(provider.displayName) must use the local service"
             )
@@ -2830,6 +2877,15 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         speakClipboardMenu.addItem(speakSupertonic)
         ttsActionItems[.supertonic] = speakSupertonic
 
+        let speakPhonon = NSMenuItem(
+            title: "Speak with Phonon 40M",
+            action: #selector(speakClipboardWithPhonon),
+            keyEquivalent: ""
+        )
+        speakPhonon.target = self
+        speakClipboardMenu.addItem(speakPhonon)
+        ttsActionItems[.phonon] = speakPhonon
+
         let speakInworld = NSMenuItem(title: "Speak with Inworld", action: #selector(speakClipboardWithInworld), keyEquivalent: "")
         speakInworld.target = self
         speakClipboardMenu.addItem(speakInworld)
@@ -3079,6 +3135,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         startTTS(provider: .supertonic)
     }
 
+    @objc private func speakClipboardWithPhonon() {
+        startTTS(provider: .phonon)
+    }
+
     @objc private func speakClipboardWithInworld() {
         startTTS(provider: .inworld)
     }
@@ -3116,7 +3176,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func openTTSSetup() {
         let alert = NSAlert()
         alert.messageText = "Set up text-to-speech"
-        alert.informativeText = "Local speech: install uv and ffmpeg, then run Install Optional Tools.command from the download. Supertonic downloads its model on first use.\n\nCloud speech: add INWORLD_API_KEY or XAI_API_KEY to the dedicated key file. Cloud voices send your clipboard text to that provider.\n\nChoose a Quick Voice from the Speak Clipboard menu. No provider is selected automatically."
+        alert.informativeText = "Local speech: install uv and ffmpeg, then run Install Optional Tools.command from the download. Supertonic downloads its model on first use. Phonon 40M downloads gated models: accept the terms for gradium/phonon-40m-de and gradium/phonon-40m-en on Hugging Face, then run `hf auth login` or add HF_TOKEN to the key file.\n\nCloud speech: add INWORLD_API_KEY or XAI_API_KEY to the dedicated key file. Cloud voices send your clipboard text to that provider.\n\nChoose a Quick Voice from the Speak Clipboard menu. No provider is selected automatically."
         alert.addButton(withTitle: "Done")
         alert.addButton(withTitle: "Edit API Keys")
         alert.addButton(withTitle: "Setup Guide")
@@ -3145,19 +3205,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         guard !isTTSProcessing else {
             return
         }
-        if provider.isLocal && !FileManager.default.isExecutableFile(atPath: supertonicTTSServiceExecutable.path) {
+        if let executable = provider.serviceExecutable,
+           !FileManager.default.isExecutableFile(atPath: executable.path) {
             openTTSSetup()
             return
         }
         if let key = provider.secretName, SecretResolver.value(for: key) == nil {
             openTTSSetup()
-            return
-        }
-        let language = TTSLanguage.current()
-        guard provider.supports(language) else {
-            playErrorSound()
-            ttsStatusItem.title = "TTS: Choose English or German for \(provider.displayName)"
-            ttsStatusItem.isHidden = false
             return
         }
 
@@ -3358,22 +3412,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         for (language, item) in ttsLanguageItems {
             item.state = language == currentLanguage ? .on : .off
         }
-        ttsLanguageItems[.auto]?.toolTip = "Available for Inworld and Grok/xAI"
+        ttsLanguageItems[.auto]?.toolTip = "Local voices choose German or English from the text"
         updateTTSActionState()
     }
 
     private func updateTTSActionState() {
-        let language = TTSLanguage.current()
-        for (provider, item) in ttsActionItems {
-            let supportsLanguage = provider.supports(language)
-            item.isEnabled = !isTTSProcessing && supportsLanguage
-            if !supportsLanguage {
-                item.toolTip = "Choose English or German; this runtime does not support Auto"
-            } else if isTTSProcessing {
-                item.toolTip = "Another speech generation is running"
-            } else {
-                item.toolTip = nil
-            }
+        for item in ttsActionItems.values {
+            item.isEnabled = !isTTSProcessing
+            item.toolTip = isTTSProcessing ? "Another speech generation is running" : nil
         }
     }
 
@@ -4383,7 +4429,7 @@ final class DictationAgent {
     private func runTTSTest(providerName: String, language: TTSLanguage, text: String) {
         guard let provider = ttsProvider(named: providerName) else {
             fputs(
-                "tts-test failed: provider must be local, supertonic, inworld, or xai\n",
+                "tts-test failed: provider must be local, supertonic, phonon, inworld, or xai\n",
                 stderr
             )
             exit(1)
@@ -4505,6 +4551,8 @@ final class DictationAgent {
         switch name.lowercased() {
         case "supertonic", "local":
             return .supertonic
+        case "phonon":
+            return .phonon
         case "inworld":
             return .inworld
         case "xai", "grok":
