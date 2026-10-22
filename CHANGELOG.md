@@ -1,6 +1,12 @@
 # Changelog
 
-## 0.4.0 - 2026-10-22
+## 0.4.1 - 2026-10-22
+
+### Security
+
+- Updated the optional continuous worker's AnyIO dependency from 4.13.0 to 4.14.2, fixing TLS hostname validation and subprocess-security issues.
+- Updated Certifi to 2026.10.19 in the Supertonic and continuous-worker environments, removing compromised certificate trust.
+- Updated the continuous worker's fsspec dependency to 2026.9.0, fixing unsafe reference-template rendering.
 
 ### Speech
 
