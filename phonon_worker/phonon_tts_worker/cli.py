@@ -11,9 +11,11 @@ from typing import Any
 
 MAXIMUM_INPUT_CHARACTERS = 100_000
 # One dedicated 40M checkpoint per language; both are gated on Hugging Face.
+# Reason for pinned commits: ptts revalidates unpinned repos online on every load,
+# which needs the token and network even when the model is cached.
 MODELS = {
-    "german": ("hf://gradium/phonon-40m-de", "de"),
-    "english": ("hf://gradium/phonon-40m-en", "en"),
+    "german": ("hf://gradium/phonon-40m-de@5c4137753f5595f3abd3f24df7ceae4455034d4c", "de"),
+    "english": ("hf://gradium/phonon-40m-en@cc738b7e4d182c2ba1bafb8062aa4846af000637", "en"),
 }
 # Named voices from gradium/phonon-voices; `None` uses the checkpoint's own voice.
 MALE_VOICES = {"german": "Henrik", "english": "Miles"}
