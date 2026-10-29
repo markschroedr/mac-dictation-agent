@@ -15,7 +15,10 @@ from .asr_backends import AsrBackend, FluidAudioBackend
 from .config import AppPaths
 from .diarization import SortformerDiarizer, asr_segments_from_result
 from .ffmpeg_tools import reencode_audio_to_opus, sha256_file
-from .manifest import append_jsonl, append_text, load_json, read_jsonl, write_json
+from .manifest import (
+    append_jsonl, append_text, iter_jsonl, jsonl_position, load_json,
+    read_jsonl_from_offset, write_json,
+)
 from .process_state import acquire_process_lock, hold_start_lock, read_live_pid, stop_process
 from .source_transcripts import process_sessions, processing_status
 
@@ -83,8 +86,10 @@ class TranscriptionWorker:
         self.logger = logging.getLogger(__name__)
         self._stop_event = threading.Event()
         self._pending: list[dict[str, object]] = []
+        self._pending_offsets: list[int] = []
         self._state: dict[str, object] = {"last_processed_line": 0}
         self._read_cursor = 0
+        self._read_offset = 0
         self._state_loaded = False
         self._backend: AsrBackend | None = None
         self._diarizer: SortformerDiarizer | None = None
@@ -100,8 +105,8 @@ class TranscriptionWorker:
 
     def run_forever(self) -> None:
         self.paths.ensure()
-        self._load_state()
         acquire_process_lock(self.pid_file, f"{self.profile.name} worker")
+        self._load_state()
         try:
             self._install_signal_handlers()
             self.logger.info("worker started profile=%s", self.profile.name)
@@ -125,16 +130,19 @@ class TranscriptionWorker:
         commit_state: bool = True,
     ) -> int:
         self.paths.ensure()
-        self._load_state()
         if from_line is not None:
-            self._read_cursor = from_line
             commit_state = False
+            self._set_cursor(from_line)
+            self._state = {"last_processed_line": from_line}
+            self._state_loaded = True
+        else:
+            self._load_state(commit_state=commit_state)
 
         processed_total = 0
         batches = 0
         while True:
             processed = self._poll_and_process(
-                max_segments=max_segments,
+                max_segments=(max_segments - processed_total if max_segments is not None else None),
                 commit_state=commit_state,
                 reload_state=from_line is None,
             )
@@ -171,27 +179,21 @@ class TranscriptionWorker:
     ) -> int:
         self.paths.ensure()
         if reload_state and not self._state_loaded:
-            self._load_state()
+            self._load_state(commit_state=commit_state)
         source_count = (process_sessions(self.paths, self.backend, self._failed_source_sessions)
                         if self.profile.name == "relaxed" else 0)
-        rows = read_jsonl(self.paths.segments_manifest)
-        if self._read_cursor > len(rows):
-            self.logger.warning(
-                "worker cursor exceeded manifest length; resetting cursor from %s to 0",
-                self._read_cursor,
-            )
-            self._read_cursor = 0
-            self._state["last_processed_line"] = 0
-            self._state["updated_at"] = datetime.now(UTC).isoformat()
-            if commit_state:
-                write_json(self.state_file, self._state)
-
-        next_rows = rows[self._read_cursor :]
+        pending_limit = self.profile.batch_max_segments
         if max_segments is not None:
-            next_rows = next_rows[:max_segments]
+            pending_limit = min(pending_limit, max_segments)
+        next_rows, next_offsets = read_jsonl_from_offset(
+            self.paths.segments_manifest, self._read_offset,
+            max_rows=max(0, pending_limit - len(self._pending)),
+        )
         if next_rows:
             self._pending.extend(next_rows)
+            self._pending_offsets.extend(next_offsets)
             self._read_cursor += len(next_rows)
+            self._read_offset = next_offsets[-1]
             self.logger.info("worker queued %s new segments profile=%s", len(next_rows), self.profile.name)
 
         if not self._pending:
@@ -202,6 +204,7 @@ class TranscriptionWorker:
         processed_count = self._flush_batch()
         if commit_state:
             self._commit_processed(processed_count)
+        del self._pending_offsets[:processed_count]
         return processed_count + source_count
 
     def _finished(self) -> bool:
@@ -212,7 +215,7 @@ class TranscriptionWorker:
         # audio, while this worker drained or waited for the lock.
         if (read_live_pid(self.paths.pid_file) is not None
                 or processing_status(self.paths)[0]
-                or len(read_jsonl(self.paths.segments_manifest)) > self._read_cursor):
+                or read_jsonl_from_offset(self.paths.segments_manifest, self._read_offset, max_rows=1)[0]):
             os.close(lock)
             return False
         return True
@@ -241,7 +244,7 @@ class TranscriptionWorker:
             batch.append(row)
             duration_ms += row_duration_ms
 
-        segment_paths = [self._resolve_audio_path(row) for row in batch]
+        segment_paths = self._resolve_audio_paths(batch)
         result = self.backend().transcribe_files(segment_paths)
         text = str(result.get("text", "")).strip()
         record = {
@@ -416,7 +419,9 @@ class TranscriptionWorker:
         return self._diarizer
 
     def _compact_batch_audio(self, batch: list[dict[str, object]]) -> None:
-        compacted = self._load_compacted_audio()
+        # New archives need no history lookup. Keep only this batch's existing archives.
+        existing_paths = {str(row["path"]) for row in batch if self._archive_audio_path(row).exists()}
+        compacted = self._load_compacted_audio(existing_paths)
         for row in batch:
             relative_path = str(row["path"])
             input_path = self.paths.root / relative_path
@@ -467,13 +472,15 @@ class TranscriptionWorker:
                 tmp_path.unlink(missing_ok=True)
                 self.logger.exception("failed to compact audio path=%s", input_path)
 
-    def _load_compacted_audio(self) -> dict[tuple[str, str], str]:
+    def _load_compacted_audio(self, relative_paths: set[str]) -> dict[tuple[str, str], str]:
         compacted: dict[tuple[str, str], str] = {}
-        for row in read_jsonl(self.paths.audio_compactions_manifest):
+        if not relative_paths:
+            return compacted
+        for row in iter_jsonl(self.paths.audio_compactions_manifest):
             path = str(row.get("path", ""))
             target_bitrate = str(row.get("target_bitrate", ""))
             new_sha = str(row.get("new_sha256", ""))
-            if path and target_bitrate and new_sha:
+            if path in relative_paths and target_bitrate == self.profile.archive_audio_bitrate and new_sha:
                 compacted[(path, target_bitrate)] = new_sha
         return compacted
 
@@ -489,43 +496,78 @@ class TranscriptionWorker:
         )
         return hour_dir / Path(str(row["path"])).name
 
-    def _resolve_audio_path(self, row: dict[str, object]) -> Path:
-        original_path = self.paths.root / str(row["path"])
-        if original_path.exists():
-            return original_path
-        archived = self._latest_archive_paths().get(str(row["path"]))
-        if archived is not None and archived.exists():
-            return archived
-        raise FileNotFoundError(f"missing segment audio: {original_path}")
+    def _resolve_audio_paths(self, batch: list[dict[str, object]]) -> list[Path]:
+        originals = [self.paths.root / str(row["path"]) for row in batch]
+        missing = {str(row["path"]) for row, path in zip(batch, originals) if not path.exists()}
+        archived = self._latest_archive_paths(missing)
+        resolved = []
+        for row, original in zip(batch, originals):
+            path = archived.get(str(row["path"]), original)
+            if not path.exists():
+                raise FileNotFoundError(f"missing segment audio: {original}")
+            resolved.append(path)
+        return resolved
 
-    def _latest_archive_paths(self) -> dict[str, Path]:
+    def _latest_archive_paths(self, relative_paths: set[str]) -> dict[str, Path]:
         paths: dict[str, Path] = {}
-        for record in read_jsonl(self.paths.audio_compactions_manifest):
+        if not relative_paths:
+            return paths
+        for record in iter_jsonl(self.paths.audio_compactions_manifest):
             original = str(record.get("path", ""))
             archive = str(record.get("archive_path", ""))
-            if original and archive:
+            if original in relative_paths and archive:
                 paths[original] = self.paths.root / archive
         return paths
 
-    def _load_state(self) -> None:
-        default_cursor = self._default_cursor()
+    def _set_cursor(self, line_count: int) -> None:
+        self._read_offset, reached = jsonl_position(self.paths.segments_manifest, line_count)
+        if reached != line_count:
+            raise RuntimeError("manifest is shorter than its row checkpoint")
+        self._read_cursor = line_count
+        self._pending.clear()
+        self._pending_offsets.clear()
+
+    def _load_state(self, *, commit_state: bool = True) -> None:
+        self._pending.clear()
+        self._pending_offsets.clear()
         state_exists = self.state_file.exists()
-        self._state = load_json(self.state_file, {"last_processed_line": default_cursor})
-        self._read_cursor = int(self._state.get("last_processed_line", default_cursor))
+        if state_exists:
+            self._state = load_json(self.state_file)
+            if "last_processed_line" not in self._state:
+                raise RuntimeError("invalid worker checkpoint; refusing to skip or replay history")
+            self._read_cursor = int(self._state["last_processed_line"])
+            saved_offset = self._state.get("last_processed_offset")
+            # An older worker can advance the line cursor during rollback but leave our keys unchanged.
+            if self._state.get("last_processed_offset_line") != self._read_cursor:
+                saved_offset = None
+            if saved_offset is None:
+                # One streaming migration from the deployed line-only checkpoint.
+                self._set_cursor(self._read_cursor)
+            else:
+                self._read_offset = int(saved_offset)
+                if self._read_cursor < 0:
+                    raise RuntimeError("negative worker row checkpoint")
+                read_jsonl_from_offset(self.paths.segments_manifest, self._read_offset, max_rows=0)
+        else:
+            # Preserve first-start behavior: process only records captured after startup.
+            self._read_offset, self._read_cursor = jsonl_position(self.paths.segments_manifest)
+            self._state = {"last_processed_line": self._read_cursor}
+            saved_offset = None
+        self._state["last_processed_offset"] = self._read_offset
+        self._state["last_processed_offset_line"] = self._read_cursor
         self._state_loaded = True
-        if not state_exists:
-            self._state["last_processed_line"] = self._read_cursor
+        if commit_state and saved_offset is None:
             self._state["updated_at"] = datetime.now(UTC).isoformat()
             self._state["profile"] = self.profile.name
             write_json(self.state_file, self._state)
-
-    def _default_cursor(self) -> int:
-        return len(read_jsonl(self.paths.segments_manifest))
 
     def _commit_processed(self, processed_count: int) -> None:
         if processed_count <= 0:
             return
         self._state["last_processed_line"] = int(self._state.get("last_processed_line", 0)) + processed_count
+        # Commit the processed prefix, never the read-ahead cursor.
+        self._state["last_processed_offset"] = self._pending_offsets[processed_count - 1]
+        self._state["last_processed_offset_line"] = self._state["last_processed_line"]
         self._state["updated_at"] = datetime.now(UTC).isoformat()
         self._state["profile"] = self.profile.name
         write_json(self.state_file, self._state)
